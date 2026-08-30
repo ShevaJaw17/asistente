@@ -1,0 +1,11 @@
+{
+  "host": "127.0.0.1",
+  "puerto": 8001,
+  "token": "9934e84973edf7050244251de153c4884d64cbd7043f9fd4016a6d9f2fac8d77",
+  "activar_al_iniciar": true,
+  "expresiones": {
+    "pensando": "Impressed",
+    "error": "Sad",
+    "respuesta": "Happy"
+  }
+}

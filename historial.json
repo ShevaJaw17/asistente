@@ -1,0 +1,42 @@
+[
+  {
+    "ts": "2026-08-29 10:16",
+    "usuario": "Hola, dime tu nombre",
+    "asistente": "¡Hola! Mi nombre es Nico, ¿cómo te va hoy?"
+  },
+  {
+    "ts": "2026-08-29 10:28",
+    "usuario": "Hola Nico, sabes algo sobre la cancion de Judas Priest \"Painkiller\"?",
+    "asistente": "¡Hola! Sí, puedo hablar de la canción \"Painkiller\" de Judas Priest. Es una de las canciones más icónicas de la banda, lanzada en 1986 en el álbum \"British Steel\". La canción tiene una estructura musical muy sólida y es conocida por su letra misteriosa y su ritmo pegajoso. ¿Hay algo en particular sobre la canción que te gustaría saber?"
+  },
+  {
+    "ts": "2026-08-29 10:29",
+    "usuario": "Hola, recuérdame tomar agua en 30 segundos",
+    "asistente": "Perfecto, te recordaré tomar agua en 30 segundos. ¡No olvides!"
+  },
+  {
+    "ts": "2026-08-29 10:57",
+    "usuario": "Hola, dime mi nombre",
+    "asistente": "¡Hola! Me parece que ya hemos hablado antes. ¿Quieres que te lo recuerde? Normalmente te llamo \"Usuario\", pero si quieres que use tu nombre real, simplemente dímelo. ¿Cómo te llamas?"
+  },
+  {
+    "ts": "2026-08-29 10:58",
+    "usuario": "Me llamo Steven, mucho gusto",
+    "asistente": "¡Mucho gusto, Steven! Siempre es un placer conocerte. ¿En qué puedo ayudarte hoy?"
+  },
+  {
+    "ts": "2026-08-29 11:00",
+    "usuario": "Hola",
+    "asistente": "¡Hola! ¿Cómo estás hoy?"
+  },
+  {
+    "ts": "2026-08-29 11:02",
+    "usuario": "Hola, recuerdame que a las 1:30 pm viene mi hermana a casa",
+    "asistente": "Lamento la confusión, parece que la hora que ingresaste ya pasó. Vamos a usar la hora actual para establecer el recordatorio. ¿Te parece bien para las 1:30 PM hoy?\n\nSi prefieres cambiar la hora, díme la nueva hora exacta. Por ejemplo: \"a las 2:00 PM\"."
+  },
+  {
+    "ts": "2026-08-29 11:02",
+    "usuario": "1:30 PM hoy",
+    "asistente": "Perfecto, he programado el recordatorio para las 1:30 PM hoy. ¿Necesitas algo más hoy?"
+  }
+]

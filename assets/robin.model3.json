@@ -1,0 +1,24 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "robin.moc3",
+		"Textures": [
+			"robin.4096/texture_00.png"
+		],
+		"Physics": "robin.physics3.json",
+		"UserData": "robin.userdata3.json",
+		"DisplayInfo": "robin.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		}
+	]
+}
