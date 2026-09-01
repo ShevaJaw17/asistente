@@ -205,6 +205,9 @@ def inicio():
 if __name__ == "__main__":
     import uvicorn
 
+    import programador
+    programador.iniciar_hilo()
+
     print("=== Asistente Robin - Servidor Web ===")
     print("Asegúrate de que llama.cpp esté corriendo (iniciar_servidor.bat).")
     print("Abre http://<IP-de-esta-máquina>:8000 en tu celular (misma WiFi).")

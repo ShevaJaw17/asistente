@@ -279,6 +279,8 @@ def sistema_con_contexto():
 
 
 def main():
+    import programador
+    programador.iniciar_hilo()
     print("=== Asistente local (qwen2.5-7b / Vulkan-GPU) ===")
     print("Servidor: " + SERVIDOR)
     print("Escribe 'salir' para terminar.")
