@@ -130,6 +130,44 @@ def nueva(req: NuevaRequest):
     return {"ok": True, "mensaje": "Conversación reiniciada."}
 
 
+# ---- Panel de control remoto: agenda y tareas programadas ----
+# Permite gestionar la agenda y las tareas programadas desde el móvil/web
+# sin pasar por el chat. Endpoints JSON + página /panel.
+
+@app.get("/agenda")
+def agenda_listar():
+    import programador
+    return {"items": programador.cargar()}
+
+
+@app.post("/agenda/del")
+def agenda_borrar(req: ChatRequest):
+    import programador
+    try:
+        r = programador.borrar(int(req.mensaje))
+    except Exception as e:
+        return {"ok": False, "mensaje": str(e)}
+    return {"ok": True, "mensaje": str(r)}
+
+
+@app.post("/agenda/add")
+def agenda_add(req: ChatRequest):
+    import json as _json
+    try:
+        d = _json.loads(req.mensaje)
+        import programador
+        r = programador.agregar(
+            d.get("nombre", "Tarea"),
+            d.get("hora", "00:00"),
+            dias=d.get("dias", "*"),
+            accion=d.get("accion", "aviso"),
+            parametros=d.get("parametros"),
+        )
+        return {"ok": True, "mensaje": str(r)}
+    except Exception as e:
+        return {"ok": False, "mensaje": str(e)}
+
+
 _PAGINA = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -206,6 +244,114 @@ _PAGINA = """<!DOCTYPE html>
 def inicio():
     hoy = datetime.now().strftime("%Y-%m-%d")
     return _PAGINA.replace("__FECHA__", hoy)
+
+
+_PANEL = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robin - Panel de control</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#12151f; color:#e6e6e6; }
+  header { background:#1d2130; padding:12px 16px; font-weight:600; border-bottom:1px solid #2c3145; }
+  main { max-width:720px; margin:0 auto; padding:16px; }
+  .card { background:#1d2130; border:1px solid #2c3145; border-radius:10px; padding:12px;
+          margin:12px 0; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .card .info small { color:#8a91a8; }
+  input, button, select { padding:10px; border-radius:8px; border:1px solid #2c3145;
+          background:#12151f; color:#e6e6e6; font-size:15px; }
+  button { background:#2f6fed; color:#fff; font-weight:600; cursor:pointer; border:none; }
+  button.del { background:#c0392b; }
+  .fila { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .badge { font-size:12px; background:#2c3145; padding:2px 8px; border-radius:20px; }
+  .vacio { color:#8a91a8; text-align:center; padding:20px; }
+  a { color:#5b8def; }
+</style>
+</head>
+<body>
+<header>Robin — Panel de control <small>· agenda y tareas programadas</small></header>
+<main>
+  <h3>Nueva tarea programada</h3>
+  <div class="fila">
+    <input id="nombre" placeholder="Nombre/descripción">
+    <input id="hora" type="time" value="09:00">
+    <select id="accion">
+      <option value="aviso">Aviso</option>
+      <option value="comando">Comando</option>
+      <option value="abrir">Abrir</option>
+    </select>
+  </div>
+  <div class="fila">
+    <select id="dias">
+      <option value="*">Todos los días</option>
+      <option value="0,1,2,3,4">Lunes a viernes</option>
+      <option value="5,6">Fin de semana</option>
+      <option value="0">Lunes</option>
+      <option value="1">Martes</option>
+      <option value="2">Miércoles</option>
+      <option value="3">Jueves</option>
+      <option value="4">Viernes</option>
+      <option value="5">Sábado</option>
+      <option value="6">Domingo</option>
+    </select>
+    <input id="param" placeholder="texto (aviso) o ruta/URL (abrir)">
+    <button id="add">Añadir</button>
+  </div>
+  <hr>
+  <h3>Agenda actual</h3>
+  <div id="lista"></div>
+  <p class="vacio" id="vacio" style="display:none">No hay tareas programadas.</p>
+  <p><a href=".">← Ir al chat</a></p>
+</main>
+<script>
+  var lista = document.getElementById('lista');
+  var vacio = document.getElementById('vacio');
+  var DIAS = ['L','M','X','J','V','S','D'];
+  function cargar() {
+    fetch('/agenda').then(function(r){ return r.json(); }).then(function(d){
+      lista.innerHTML = '';
+      if (!d.items || d.items.length === 0) { vacio.style.display='block'; return; }
+      vacio.style.display = 'none';
+      d.items.forEach(function(t){
+        var dias = t.dias === '*' ? 'todos' : t.dias.map(function(x){return DIAS[x];}).join(',');
+        var div = document.createElement('div');
+        div.className = 'card';
+        var info = document.createElement('div');
+        info.className = 'info';
+        info.innerHTML = '<strong>'+ (t.nombre||'') +'</strong> <small>'+
+          t.hora + ' · ' + dias + ' · ' + (t.accion||'aviso') +
+          (t.activa===false ? ' · pausada' : '') + '</small>';
+        var btn = document.createElement('button');
+        btn.className='del'; btn.textContent='Quitar';
+        btn.onclick = function(){ fetch('/agenda/del', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({mensaje: String(t.id)})}).then(cargar); };
+        div.appendChild(info); div.appendChild(btn);
+        lista.appendChild(div);
+      });
+    });
+  }
+  document.getElementById('add').onclick = function(){
+    var body = {
+      nombre: document.getElementById('nombre').value || 'Tarea',
+      hora: document.getElementById('hora').value || '09:00',
+      dias: document.getElementById('dias').value,
+      accion: document.getElementById('accion').value,
+      parametros: { texto: document.getElementById('param').value }
+    };
+    fetch('/agenda/add', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mensaje: JSON.stringify(body)})}).then(function(){cargar();});
+  };
+  cargar();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/panel", response_class=HTMLResponse)
+def panel():
+    return _PANEL
 
 
 if __name__ == "__main__":

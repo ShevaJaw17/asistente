@@ -14,7 +14,7 @@ if not exist %SRV% (
 echo Iniciando servidor llama.cpp con GPU (Vulkan)...
 echo Puerta: http://127.0.0.1:8080
 echo.
-%SRV% --model %MODELS%\qwen2.5-7b-Q4_K_M.gguf --host 127.0.0.1 --port 8080 -ngl 99 -c 4096
+%SRV% --model %MODELS%\qwen2.5-7b-Q4_K_M.gguf --host 127.0.0.1 --port 8080 -ngl 99 -c 8192
 echo.
 echo El servidor se detuvo.
 pause
