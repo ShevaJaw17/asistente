@@ -97,11 +97,35 @@ class AsistenteApp:
         self._construir_ui()
         self._agregar_mensaje("sistema", "Asistente iniciado. Escribe para comenzar.")
         if self.avatar.cfg.get("activar_al_iniciar", True):
-            self.avatar.conectar()
+            threading.Thread(target=self._conectar_avatar_seguro, daemon=True).start()
         if avatar_l2d is None:
             self._iniciar_robin_flotante()
         self.root.after(5000, self._revisar_recordatorios)
+        self.root.after(7000, self._chequear_servidor)
         self.root.after(12000, self._bucle_proactividad)
+        for sec in ("<Control-Return>", "<Control-a>", "<Escape>"):
+            try:
+                self.root.bind(sec, self._atajos)
+            except Exception:
+                pass
+
+    def _conectar_avatar_seguro(self):
+        """Conecta con VTube Studio en segundo plano sin bloquear la ventana."""
+        try:
+            self.avatar.conectar(reintentos=1)
+        except Exception:
+            pass
+
+    def _atajos(self, evento):
+        """Atajos de teclado: Ctrl+Enter=Enviar, Ctrl+L=limpiar, Escape=quitar foco."""
+        try:
+            if evento.keysym == "Return" and evento.state & 0x4:
+                self.enviar()
+            elif evento.keysym == "Escape":
+                self.root.focus_set()
+                self.entrada.focus_set()
+        except Exception:
+            pass
 
     def _al_tk(self, fn, *args):
         """Programa una llamada a Tk desde el hilo principal (seguro desde
@@ -163,12 +187,21 @@ class AsistenteApp:
 
         self.lbl_avatar = tk.Label(
             marco_barra,
-            text="â€”",
+            text="",
             bg="#2b2b2b",
             fg="#9e9e9e",
             font=("Segoe UI", 9),
         )
         self.lbl_avatar.pack(side=tk.RIGHT, pady=6)
+
+        self.lbl_servidor = tk.Label(
+            marco_barra,
+            text="Servidor: ...",
+            bg="#2b2b2b",
+            fg="#9e9e9e",
+            font=("Segoe UI", 8),
+        )
+        self.lbl_servidor.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
 
         self.lbl_estado = tk.Label(
             marco_barra,
@@ -208,6 +241,35 @@ class AsistenteApp:
             pady=4,
         )
         self.btn_mic.pack(side=tk.RIGHT, padx=(6, 2), pady=4)
+
+        # --- Barra de acciones rápidas (atajos de un clic) ---
+        marco_rapidas = tk.Frame(self.root, bg="#26272e")
+        marco_rapidas.pack(side=tk.TOP, fill=tk.X)
+        acciones = [
+            ("Clima", "¿Cuál es el clima en Madrid?"),
+            ("Resumen del día", "Hazme el resumen del día"),
+            ("Tareas", "Muéstrame mis tareas"),
+            ("Notas", "Qué notas tengo guardadas?"),
+            ("Recordatorios", "Lista mis recordatorios"),
+            ("Agenda", "Muéstrame mi agenda"),
+        ]
+        self._btn_accion = {}
+        for texto, msg in acciones:
+            b = tk.Button(
+                marco_rapidas,
+                text=texto,
+                command=lambda m=msg: self._accion_rapida(m),
+                bg="#34363f",
+                fg="#e0e0e0",
+                activebackground="#4a4d59",
+                activeforeground="#ffffff",
+                relief=tk.FLAT,
+                font=("Segoe UI", 9),
+                padx=10,
+                pady=3,
+            )
+            b.pack(side=tk.LEFT, padx=(6, 0), pady=4)
+            self._btn_accion[texto] = b
 
         marco_cuerpo = tk.Frame(self.root, bg="#1e1e1e")
         marco_cuerpo.pack(fill=tk.BOTH, expand=True)
@@ -274,6 +336,38 @@ class AsistenteApp:
             pady=4,
         )
         self.btn_enviar.pack(side=tk.RIGHT)
+
+    def _accion_rapida(self, mensaje):
+        """Envía directamente una acción rápida sin depender de escribir."""
+        if self.ocupado or not mensaje:
+            return
+        self.entrada.delete(0, tk.END)
+        self.entrada.insert(0, mensaje)
+        self.enviar()
+
+    def _chequear_servidor(self):
+        """Actualiza el indicador del servidor llama.cpp (puerto 8080)."""
+        try:
+            import socket
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            try:
+                s.connect(("127.0.0.1", 8080))
+                ok = True
+            except Exception:
+                ok = False
+            finally:
+                s.close()
+            color = "#6fcf97" if ok else "#e74c3c"
+            texto = "Servidor: OK" if ok else "Servidor: apagado"
+            self._al_tk(lambda: self.lbl_servidor.config(text=texto, fg=color))
+        except Exception:
+            pass
+        try:
+            self.root.after(5000, self._chequear_servidor)
+        except Exception:
+            pass
 
     def _estado(self, texto, color="#9ef01a"):
         self.lbl_estado.config(text=texto, fg=color)
@@ -401,7 +495,7 @@ class AsistenteApp:
 
     def _agregar_mensaje(self, quien, texto):
         self.chat.config(state=tk.NORMAL)
-        etiqueta = {"usuario": "Tu", "asistente": "Asistente",
+        etiqueta = {"usuario": "Tu", "asistente": self._nombre,
                     "sistema": "Sistema", "tool": "Herramienta"}[quien]
         self.chat.insert(tk.END, f"{etiqueta}: ", quien)
         self.chat.insert(tk.END, f"{texto}\n\n", "normal")
@@ -414,7 +508,7 @@ class AsistenteApp:
             lambda: respuesta.put(
                 messagebox.askyesno(
                     "Confirmar comando",
-                    f"Â¿Ejecutar este comando?\n\n{mensaje}",
+                    f"¿Ejecutar este comando?\n\n{mensaje}",
                 )
             )
         )
@@ -471,9 +565,9 @@ class AsistenteApp:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
-                self._al_tk(self._robin_actividad, f"Ejecutando: {nombre}â€¦", 2.2)
+                self._al_tk(self._robin_actividad, f"Ejecutando: {nombre}", 2.2)
                 resultado = asistente.ejecutar_herramienta(nombre, args)
-                self._al_tk(self._robin_actividad, "Hecho âœ“", 1.2)
+                self._al_tk(self._robin_actividad, "Hecho", 1.2)
                 self.mensajes.append(
                     {
                         "role": "tool",
@@ -640,7 +734,7 @@ class AsistenteApp:
         self._agregar_mensaje("asistente", texto)
         self._ultima_actividad = time.time()
         self._robin_gesto("saludo")
-        self._robin_actividad("Â¡Hola!", 2.5)
+        self._robin_actividad("¡Hola!", 2.5)
         if self.voz_activa and voz is not None:
             try:
                 voz.hablar(texto)
