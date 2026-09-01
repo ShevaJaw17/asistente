@@ -343,5 +343,92 @@ def main():
         print()
 
 
+def main_voz():
+    """Loop del asistente en modo voz (manos libres): escucha por micrófono
+    y responde en voz alta. Requiere micrófono + voz.py (edge-tts / STT)."""
+    import voz
+
+    if voz is None or getattr(voz, "hablar", None) is None:
+        print("La voz no está disponible. Se cae al modo texto.")
+        return main()
+
+    import programador
+    programador.iniciar_hilo()
+
+    print("=== Asistente por voz (qwen2.5-7b) ===")
+    print("Escuchando... Habla y espera mi respuesta.")
+    print("Di 'salir' o 'termina' para terminar.")
+    print()
+    mensajes = [
+        {
+            "role": "system",
+            "content": sistema_con_contexto(),
+        }
+    ]
+    while True:
+        texto, error = voz.escuchar()
+        if error:
+            if error == "silencioso":
+                continue  # nada que oír, seguimos escuchando
+            print(f"  (no pude oírte: {error})")
+            continue
+        entrada = texto.strip()
+        if not entrada:
+            continue
+        print(f"  Tú: {entrada}")
+        if entrada.lower() in ("salir", "exit", "quit", "termina", "detente", "adiós"):
+            print("Adiós.")
+            break
+        mensajes.append({"role": "user", "content": entrada})
+        try:
+            mensaje = responder_asistente(mensajes)
+        except Exception as e:
+            mensaje_error = f"No pude conectar con el servidor: {e}"
+            print(f"\n[Error] {mensaje_error}")
+            voz.hablar("No pude conectar con el servidor.")
+            mensajes.pop()
+            continue
+        mensajes.append(
+            {
+                "role": "assistant",
+                "content": mensaje.get("content", ""),
+                "tool_calls": mensaje.get("tool_calls"),
+            }
+        )
+        if mensaje.get("tool_calls"):
+            for llamada in mensaje["tool_calls"]:
+                nombre = llamada["function"]["name"]
+                args = llamada["function"].get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                print(f"    [Herramienta: {nombre}]")
+                resultado = ejecutar_herramienta(nombre, args)
+                mensajes.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": llamada.get("id", ""),
+                        "content": str(resultado),
+                    }
+                )
+            try:
+                mensaje = responder_asistente(mensajes)
+            except Exception as e:
+                print(f"\n[Error: {e}]")
+                mensajes.append({"role": "assistant", "content": ""})
+                continue
+            mensajes.append({"role": "assistant", "content": mensaje.get("content", "")})
+        respuesta = mensaje.get("content", "")
+        print(f"  Robin: {respuesta}")
+        voz.hablar(respuesta)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if "--voz" in sys.argv or "-v" in sys.argv:
+        main_voz()
+    else:
+        main()
