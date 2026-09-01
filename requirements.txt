@@ -1,0 +1,31 @@
+# Dependencias directas del Asistente Virtual (entorno venv)
+# Instalar en una máquina nueva con:  python -m venv venv && venv\Scripts\pip install -r requirements.txt
+
+# Núcleo / HTTP
+httpx>=0.28
+pydantic>=2.0
+
+# Mensajería del chat y tools del asistente.py
+numpy>=1.26
+
+# Visión / imágenes (capturas de pantalla, assets Live2D)
+pillow>=12
+
+# Voz
+edge-tts>=7.2
+SpeechRecognition>=3.17
+PyAudio>=0.2.14
+
+# Avatar Live2D (solo si usas avatar_nativo.py)
+live2d-py>=0.7
+pyopengltk>=0.0.4
+PyOpenGL>=3.1
+
+# Procesado de assets PSD (solo scripts de edición de arte)
+psd-tools>=1.18
+
+# Extras opcionales instalados en el entorno (sin uso directo en el núcleo)
+ollama>=0.6
+fastapi>=0.128
+uvicorn>=0.30
+openai>=2.20

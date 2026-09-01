@@ -6,3 +6,14 @@ llama_cpp/
 umamo/
 umamo-dist/
 capturas/
+
+# Datos de usuario (no versionar)
+memoria.json
+memoria_semantica.json
+tareas.json
+notas.json
+historial.json
+recordatorios.json
+proactividad.json
+voz_config.json
+config_vtube.json
