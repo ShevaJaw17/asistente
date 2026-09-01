@@ -1,0 +1,13 @@
+{
+  "whitelist": [],
+  "apps": {
+    "navegador": "start msedge",
+    "edge": "start msedge",
+    "chrome": "start chrome",
+    "bloc de notas": "notepad",
+    "notepad": "notepad",
+    "calculadora": "calc",
+    "explorador": "explorer",
+    "explorador de archivos": "explorer"
+  }
+}

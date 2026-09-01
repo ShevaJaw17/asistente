@@ -77,13 +77,13 @@ def cambiar_nombre(nombre):
 
 @reg.registrar(
     "cambiar_voz",
-    descripcion="Cambia la voz de TTS. Ejemplos: es-MX-DaliaNeural, es-ES-AlvaroNeural, es-US-JennyNeural. Usa listar_voces para ver opciones.",
-    parametros={"voz": {"type": "string", "description": "Identificador de voz edge-tts.", "requerido": True}},
+    descripcion="Cambia la voz de TTS. Kokoro (local): 'ef_dora' (femenino), 'em_alex', 'em_santa' (masculino). edge-tts: es-MX-DaliaNeural, etc. Usa listar_voces para ver opciones.",
+    parametros={"voz": {"type": "string", "description": "Identificador de voz (Kokoro o edge-tts).", "requerido": True}},
 )
 def cambiar_voz(voz):
     voz = (voz or "").strip()
-    if not voz or ".Neural" not in voz:
-        return "Formato de voz no válido. Ejemplos: es-MX-DaliaNeural, es-ES-AlvaroNeural."
+    if not voz or (".Neural" not in voz and voz[:2] not in ("ef", "em")):
+        return "Formato de voz no válido. Ejemplos (Kokoro): ef_dora, em_alex. Ejemplos (edge-tts): es-MX-DaliaNeural."
     aplicados = personalidad.aplicar_config({"voz": voz})
     ok = _actualizar_voz_txt(voz)
     if "voz" in aplicados and ok:
@@ -93,11 +93,16 @@ def cambiar_voz(voz):
 
 @reg.registrar(
     "listar_voces",
-    descripcion="Muestra voces de TTS recomendadas (español) para Robin.",
+    descripcion="Muestra voces de TTS disponibles (español) para Robin.",
 )
 def listar_voces():
     return (
         "Voces TTS disponibles (español):\n"
+        "Kokoro (local, más natural):\n"
+        "- ef_dora (femenino)\n"
+        "- em_alex (masculino)\n"
+        "- em_santa (masculino)\n"
+        "edge-tts (fallback):\n"
         "- es-MX-DaliaNeural (femenino, MX)\n"
         "- es-MX-JorgeNeural (masculino, MX)\n"
         "- es-ES-AlvaroNeural (masculino, ES)\n"

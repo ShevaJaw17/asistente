@@ -16,6 +16,12 @@ edge-tts>=7.2
 SpeechRecognition>=3.17
 PyAudio>=0.2.14
 
+# Voz local más natural (Kokoro-82M). Requiere espeak-ng instalado en el sistema
+# (winget install eSpeak-NG.eSpeak-NG) para el G2P en español.
+kokoro>=0.9.4
+soundfile>=0.14
+misaki>=0.9.4
+
 # Avatar Live2D (solo si usas avatar_nativo.py)
 live2d-py>=0.7
 pyopengltk>=0.0.4

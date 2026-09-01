@@ -36,19 +36,19 @@ PERFILES = {
     },
 }
 
-# Tono de voz TTS por perfil (voz edge-tts).
+# Tono de voz TTS por perfil (voz Kokoro-82M local; 'ef_dora' es la femenina de español).
 _VOZ_POR_PERFIL = {
-    "erudita": "es-MX-DaliaNeural",
-    "amistosa": "es-MX-JorgeNeural",
-    "formal": "es-MX-BeatrizNeural",
-    "graciosa": "es-ES-AlvaroNeural",
+    "erudita": "ef_dora",
+    "amistosa": "ef_dora",
+    "formal": "ef_dora",
+    "graciosa": "ef_dora",
 }
 
 # Perfil y configuración por defecto.
 _DEFAULT = {
     "personalidad": "erudita",
     "nombre": "Robin",
-    "voz": "es-MX-DaliaNeural",
+    "voz": "ef_dora",
     "idioma": "es",
     "despertador": "",
 }

@@ -1,5 +1,6 @@
 # voz.py - Habla y escucha del asistente.
-#  - Hablar: edge-tts sintetiza voz en español; se reproduce con winmm (Windows).
+#  - Hablar: Kokoro-82M (local, más natural) o edge-tts (fallback) sintetizan
+#    la voz en español; se reproduce con winmm (Windows).
 #  - Escuchar: micrófono via pyaudio + reconocimiento SpeechRecognition (Google).
 import asyncio
 import ctypes
@@ -24,6 +25,30 @@ try:
 except Exception:
     pyaudio = None
 
+# Kokoro-82M (local, CPU). Se importa de forma perezosa y en un único pipeline.
+_KOKORO = None
+_KOKORO_PIPELINE = None
+_KOKORO_SR = 24000
+
+
+def _obtener_kokoro():
+    """Devuelve (KPipeline, sf, np, sample_rate) para una voz de Kokoro como 'ef_dora'."""
+    global _KOKORO, _KOKORO_PIPELINE, _KOKORO_SR
+    if _KOKORO_PIPELINE is None:
+        import numpy as np
+        import soundfile as sf
+        from kokoro import KPipeline
+        _KOKORO = (KPipeline, sf, np)
+        _KOKORO_PIPELINE = KPipeline(lang_code="e", repo_id="hexgrad/Kokoro-82M", device="cpu")
+        _KOKORO_SR = 24000
+    KPipeline, sf, np = _KOKORO
+    return _KOKORO_PIPELINE, sf, np, _KOKORO_SR
+
+
+def _es_voz_kokoro(voz):
+    """Las voces edge-tts contienen '.Neural'; el resto se tratan como Kokoro."""
+    return bool(voz) and ".Neural" not in voz
+
 # Voz configurable desde "voz_config.json" (voz, ritmo, tono, idioma STT).
 _DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVO_CONFIG = os.path.join(_DIR, "voz_config.json")
@@ -45,22 +70,48 @@ _mutex = threading.Lock()
 
 # ---------------------------- HABLAR (TTS) ----------------------------
 def _sintetizar(texto, ruta):
+    if _es_voz_kokoro(VOZ):
+        try:
+            KPipeline, sf, np, sr = _obtener_kokoro()
+        except Exception:
+            if edge_tts is None:
+                raise RuntimeError("no hay motor TTS disponible (kokoro y edge-tts fallaron)")
+            _sintetizar_edge(texto, ruta)
+            return
+        audios = []
+        try:
+            for res in KPipeline(texto, voice=VOZ, speed=1.0):
+                audios.append(res.audio.numpy())
+        except Exception:
+            if edge_tts is not None:
+                _sintetizar_edge(texto, ruta)
+                return
+            raise
+        full = np.concatenate(audios) if audios else np.zeros(0, dtype=np.float32)
+        sf.write(ruta, full, sr)
+        return
     if edge_tts is None:
         raise RuntimeError("edge-tts no disponible")
+    _sintetizar_edge(texto, ruta)
+
+
+def _sintetizar_edge(texto, ruta, voz=None):
+    voice = voz or ("es-MX-DaliaNeural" if _es_voz_kokoro(VOZ) else VOZ)
     parametros = {}
     if RITMO:
         parametros["rate"] = RITMO
     if TONO and TONO != "+0Hz":
         parametros["pitch"] = TONO
-    com = edge_tts.Communicate(texto, VOZ, **parametros)
+    com = edge_tts.Communicate(texto, voice, **parametros)
     com.save_sync(ruta)
 
 
 def _reproducir(ruta):
     mci = ctypes.windll.winmm.mciSendStringW
     alias = "asistente_tts"
+    tipo = "waveaudio" if ruta.lower().endswith(".wav") else "mpegvideo"
     try:
-        mci(f'open "{ruta}" type mpegvideo alias {alias}', None, 0, None)
+        mci(f'open "{ruta}" type {tipo} alias {alias}', None, 0, None)
         mci(f"play {alias} wait", None, 0, None)
     finally:
         try:
@@ -88,7 +139,7 @@ def hablar(texto, on_inicio=None, on_fin=None):
                 on_inicio()
             except Exception:
                 pass
-        fd, ruta = tempfile.mkstemp(suffix=".mp3")
+        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _es_voz_kokoro(VOZ) else ".mp3"))
         os.close(fd)
         try:
             _sintetizar(texto, ruta)
@@ -116,7 +167,7 @@ def hablar_sincrono(texto):
     with _mutex:
         if edge_tts is None:
             return
-        fd, ruta = tempfile.mkstemp(suffix=".mp3")
+        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _es_voz_kokoro(VOZ) else ".mp3"))
         os.close(fd)
         try:
             _sintetizar(texto, ruta)
