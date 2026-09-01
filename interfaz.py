@@ -11,6 +11,8 @@ from datetime import datetime
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+import personalidad
+
 import asistente
 import avatar
 
@@ -66,9 +68,11 @@ except Exception:
 class AsistenteApp:
     def __init__(self, root):
         self.root = root
-        root.title("Asistente Virtual Local")
-        root.geometry("720x640")
-        root.minsize(560, 480)
+        cfg = personalidad.obtener_config()
+        self._nombre = cfg.get("nombre", "Nico Robin")
+        root.title(self._nombre)
+        root.geometry("1100x720")
+        root.minsize(860, 520)
 
         self.mensajes = [
             {
@@ -135,42 +139,12 @@ class AsistenteApp:
         marco_barra.pack(side=tk.TOP, fill=tk.X)
         tk.Label(
             marco_barra,
-            text=" Asistente Virtual (qwen2.5-7b / GPU-Vulkan)",
+            text=f" {self._nombre}",
             bg="#2b2b2b",
             fg="#ffffff",
             font=("Segoe UI", 11, "bold"),
             anchor="w",
         ).pack(side=tk.LEFT, padx=8, pady=6)
-
-        self.btn_avatar = tk.Button(
-            marco_barra,
-            text="Avatar",
-            command=self.toggle_avatar,
-            bg="#3a3a3a",
-            fg="#e0e0e0",
-            activebackground="#555555",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            font=("Segoe UI", 9),
-            padx=10,
-            pady=4,
-        )
-        self.btn_avatar.pack(side=tk.RIGHT, padx=(6, 4), pady=4)
-
-        self.btn_robin = tk.Button(
-            marco_barra,
-            text="Robin",
-            command=self.toggle_robin,
-            bg="#3a3a3a",
-            fg="#e0e0e0",
-            activebackground="#555555",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            font=("Segoe UI", 9),
-            padx=10,
-            pady=4,
-        )
-        self.btn_robin.pack(side=tk.RIGHT, padx=(0, 4), pady=4)
 
         self.btn_proactivo = tk.Button(
             marco_barra,
@@ -207,7 +181,7 @@ class AsistenteApp:
 
         self.btn_voz = tk.Button(
             marco_barra,
-            text="ðŸ”Š",
+            text="Voz: ON",
             command=self.toggle_voz,
             bg="#3a3a3a",
             fg="#e0e0e0",
@@ -222,7 +196,7 @@ class AsistenteApp:
 
         self.btn_mic = tk.Button(
             marco_barra,
-            text="ðŸŽ¤",
+            text="Hablar",
             command=self.toggle_mic,
             bg="#3a3a3a",
             fg="#e0e0e0",
@@ -379,7 +353,7 @@ class AsistenteApp:
 
     def toggle_voz(self):
         self.voz_activa = not self.voz_activa
-        self.btn_voz.config(text="ðŸ”Š" if self.voz_activa else "ðŸ”‡")
+        self.btn_voz.config(text="Voz: ON" if self.voz_activa else "Voz: OFF")
 
     def toggle_mic(self):
         if voz is None or self._escuchando or self.ocupado:
@@ -397,7 +371,7 @@ class AsistenteApp:
 
         def final():
             self._escuchando = False
-            self.btn_mic.config(text="ðŸŽ¤", state=tk.NORMAL)
+            self.btn_mic.config(text="Hablar", state=tk.NORMAL)
             self.entrada.focus_set()
             if error == "silencioso":
                 self._estado("Listo")
