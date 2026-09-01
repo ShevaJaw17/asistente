@@ -112,6 +112,12 @@ def chat(req: ChatRequest):
         try:
             mensajes.append({"role": "user", "content": mensaje})
             respuesta = _procesar(mensajes)
+            try:
+                from tools.historial import guardar_turno
+
+                guardar_turno(mensaje, respuesta, client_id=req.client_id)
+            except Exception:
+                pass
             return {"respuesta": respuesta}
         except Exception as e:
             return {"respuesta": f"[Error] {e}"}
