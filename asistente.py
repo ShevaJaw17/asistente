@@ -15,7 +15,7 @@ import recordatorios
 import sistema
 
 SERVIDOR = "http://127.0.0.1:8080"
-MODELO = "qwen2.5-7b"
+MODELO = "qwen2.5-3b"
 
 
 def copiar_portapapeles_windows(texto):
@@ -209,6 +209,138 @@ def llamar_modelo(mensajes, herramientas=None):
 def responder_asistente(mensajes):
     data = llamar_modelo(mensajes, _obtener_herramientas())
     return data["choices"][0]["message"]
+
+
+# ---- Streaming (TTS en paralelo con el texto) ----
+# El texto se devuelve por fragmentos ("frases") apenas el modelo los genera,
+# para que la voz pueda empezar a hablar antes de que termine toda la respuesta.
+_CORTE_FRASE = ".\n¿?¡!;"
+
+
+def _llamar_modelo_stream(mensajes, herramientas=None, on_token=None):
+    """Llama al modelo en streaming.
+    - Acumula el texto completo y las tool_calls.
+    - Si `on_token` se pasa, se invoca on_token(texto_parcial) con cada trozo de
+      texto en tiempo real (para poder fragmentar por frases apenas llegan).
+    Devuelve (texto, tool_calls, finish_reason)."""
+    payload = {
+        "model": MODELO,
+        "messages": mensajes,
+        "max_tokens": 512,
+        "temperature": 0.8,
+        "stream": True,
+    }
+    if herramientas:
+        payload["tools"] = herramientas
+    texto = ""
+    tool_calls = {}
+    orden = []
+    with CLIENTE.stream("POST", "/v1/chat/completions", json=payload) as resp:
+        resp.raise_for_status()
+        for linea in resp.iter_lines():
+            if not linea or not linea.startswith("data:"):
+                continue
+            d = linea[5:].strip()
+            if not d:
+                continue
+            try:
+                obj = _json_stream(d)
+            except Exception:
+                continue
+            ch = (obj.get("choices") or [{}])[0]
+            delta = ch.get("delta") or {}
+            if delta.get("content"):
+                trozo = delta["content"]
+                texto += trozo
+                if on_token:
+                    try:
+                        on_token(trozo)
+                    except Exception:
+                        pass
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                if idx not in tool_calls:
+                    tool_calls[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    orden.append(idx)
+                fn = tc.get("function") or {}
+                if tc.get("id"):
+                    tool_calls[idx]["id"] = tc["id"]
+                if fn.get("name"):
+                    tool_calls[idx]["function"]["name"] = fn["name"]
+                if fn.get("arguments"):
+                    tool_calls[idx]["function"]["arguments"] += fn["arguments"]
+    return texto, [tool_calls[i] for i in orden]
+
+
+def _json_stream(s):
+    import json as _json
+    return _json.loads(s)
+
+
+def responder_streaming(mensajes, on_fragmento=None):
+    """Mismo chat que responder_asistente pero en modo streaming: invoca
+    `on_fragmento(texto)` por cada frase del texto final apenas se genera.
+    Devuelve el texto completo. Maneja las tools igual que el chat normal."""
+    acumulador = [""]
+    # Buffer para fragmentar frases en vivo
+    buf = [""]
+
+    def _emitir_en_vivo(trozo):
+        buf[0] += trozo
+        while True:
+            # emitir hasta el último corte de frase presente
+            corte = -1
+            for i in range(len(buf[0])):
+                if buf[0][i] in _CORTE_FRASE:
+                    corte = i
+            if corte < 0:
+                break
+            frase = buf[0][: corte + 1].strip()
+            buf[0] = buf[0][corte + 1:]
+            if frase:
+                try:
+                    on_fragmento(frase)
+                except Exception:
+                    pass
+
+    while True:
+        texto, tool_calls = _llamar_modelo_stream(
+            mensajes, _obtener_herramientas(),
+            on_token=_emitir_en_vivo if on_fragmento else None,
+        )
+        acumulador[0] += texto
+        if tool_calls:
+            # Turno de herramienta: ejecutar y continuar el loop (sin emitir aún).
+            buf[0] = ""
+            mensajes.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+            for llamada in tool_calls:
+                nombre = llamada["function"]["name"]
+                args = llamada["function"].get("arguments", "")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                try:
+                    resultado = ejecutar_herramienta(nombre, args)
+                except Exception as e:
+                    resultado = f"Error: {e}"
+                mensajes.append({
+                    "role": "tool",
+                    "tool_call_id": llamada.get("id", ""),
+                    "content": str(resultado),
+                })
+            continue
+        # Turno final de texto: si hay residuo en vivo, emitirlo.
+        if on_fragmento:
+            resto = buf[0].strip()
+            if resto:
+                try:
+                    on_fragmento(resto)
+                except Exception:
+                    pass
+            buf[0] = ""
+        return acumulador[0].strip()
 
 
 PROMPT_SISTEMA = (

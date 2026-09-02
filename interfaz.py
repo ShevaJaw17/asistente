@@ -83,6 +83,7 @@ class AsistenteApp:
 
         self.ocupado = False
         self.voz_activa = True
+        self._voz_streaming = False
         self._escuchando = False
         asistente.confirmar_accion = self._confirmar_en_gui
 
@@ -540,6 +541,34 @@ class AsistenteApp:
             self._al_tk(self._finalizar, f"[Error: {e}]")
 
     def _procesar_mensajes(self):
+        # Si la voz está activa, usamos streaming: la voz empieza a hablar por
+        # frases apenas se generan, en paralelo al avance del texto.
+        if self.voz_activa and voz is not None:
+            try:
+                from queue import Queue, Empty as _Empty
+            except Exception:
+                pass
+            import asistente as _as
+
+            self._voz_streaming = True
+
+            def on_fragmento(frase):
+                try:
+                    voz.hablar_fragmento(frase)
+                except Exception:
+                    pass
+
+            try:
+                texto = _as.responder_streaming(self.mensajes, on_fragmento=on_fragmento)
+            except Exception as e:
+                return f"[Error: {e}]"
+            try:
+                _as.guardar_intercambio(self.mensajes)
+            except Exception:
+                pass
+            # Mantener el historial igual que el modo clásico.
+            self.mensajes.append({"role": "assistant", "content": texto, "tool_calls": None})
+            return texto
         while True:
             mensaje = asistente.responder_asistente(self.mensajes)
             self.mensajes.append(
@@ -593,8 +622,9 @@ class AsistenteApp:
             if self.avatar_robin is not None:
                 self.avatar_robin.expresion_estado("respuesta")
                 self.avatar_robin.hablar_texto(texto)
-            if self.voz_activa and voz is not None:
+            if self.voz_activa and voz is not None and not self._voz_streaming:
                 voz.hablar(texto)
+        self._voz_streaming = False
         self.entrada.focus_set()
 
     def _revisar_recordatorios(self):

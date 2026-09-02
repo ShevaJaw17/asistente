@@ -272,6 +272,79 @@ def hablar_sincrono(texto):
                 pass
 
 
+# ----------------- Voz por fragmentos (streaming TTS) -----------------
+# Permite que el GUI vaya encolando frases a medida que el texto se genera:
+# un hilo consumidor las sintetiza y reproduce en orden, en paralelo al avance
+# del texto. Útil porque el TTS local (Chatterbox) es lento en CPU.
+import queue as _queue
+
+_COLA_VOZ = _queue.Queue()
+_HILO_VOZ = None
+
+
+def _consumir_voz():
+    """Consume la cola de fragmentos indefinidamente: sintetiza + reproduce."""
+    while True:
+        try:
+            texto = _COLA_VOZ.get()
+            if texto is None:
+                break
+            if _existe_voz(texto):
+                fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
+                os.close(fd)
+                try:
+                    _sintetizar(texto, ruta)
+                    _reproducir(ruta)
+                finally:
+                    try:
+                        os.remove(ruta)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        finally:
+            _COLA_VOZ.task_done()
+
+
+def _asegurar_hilo_voz():
+    global _HILO_VOZ
+    if _HILO_VOZ is None or not _HILO_VOZ.is_alive():
+        _HILO_VOZ = threading.Thread(target=_consumir_voz, daemon=True)
+        _HILO_VOZ.start()
+
+
+def hablar_fragmento(texto):
+    """Encola una frase para que suene apenas el TTS la procese (no bloquea).
+    Los fragmentos se reproducen en orden en el hilo de voz."""
+    if not _existe_voz(texto):
+        return
+    _asegurar_hilo_voz()
+    _COLA_VOZ.put(texto)
+
+
+def hablar_stream(fragmentos):
+    """Encola una secuencia de fragmentos de texto (iterable) que suena en
+    paralelo al avance del texto. Inicia el habla por streaming."""
+    _asegurar_hilo_voz()
+    for frag in fragmentos:
+        if frag and frag.strip():
+            _COLA_VOZ.put(frag)
+
+
+def detener_voz():
+    """Vacía la cola pendiente e interrumpe el audio en reproducción."""
+    while not _COLA_VOZ.empty():
+        try:
+            _COLA_VOZ.get_nowait()
+            _COLA_VOZ.task_done()
+        except Exception:
+            break
+    try:
+        ctypes.windll.winmm.mciSendStringW("close todos", None, 0, None)
+    except Exception:
+        pass
+
+
 # ---------------------------- ESCUCHAR (STT) ----------------------------
 def _grabar(duracion_max=8.0, silencio=1.0):
     """Graba con el micrófono y devuelve sr.AudioData."""

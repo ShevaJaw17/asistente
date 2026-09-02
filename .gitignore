@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.log
 llama_cpp/
+piper/
+*.gguf
 umamo/
 umamo-dist/
 capturas/
