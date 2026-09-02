@@ -1,6 +1,6 @@
 # voz.py - Habla y escucha del asistente.
-#  - Hablar: Kokoro-82M (local, más natural) o edge-tts (fallback) sintetizan
-#    la voz en español; se reproduce con winmm (Windows).
+#  - Hablar: voz clonada de Robin (Chatterbox, local), Kokoro-82M (local) o
+#    edge-tts (fallback) sintetizan la voz en español; se reproduce con winmm (Windows).
 #  - Escuchar: micrófono via pyaudio + reconocimiento SpeechRecognition (Google).
 import asyncio
 import ctypes
@@ -31,6 +31,53 @@ _KOKORO_PIPELINE = None
 _KOKORO_SR = 24000
 
 
+# --- Voz clonada de Robin (Chatterbox, Resemble AI, local, MIT) ---
+# Usa un clip de referencia de la voz (data/robin_ref.wav) para clonar en cero-shots.
+_VOZ_ROBIN = "robin"          # identificador con el que se selecciona esta voz.
+_CHATTERBOX = None             # (modelo, sr) cargados de forma perezosa.
+
+
+def _obtener_chatterbox():
+    """Devuelve (modelo, sr) de Chatterbox cargados en CPU (una sola vez)."""
+    global _CHATTERBOX
+    if _CHATTERBOX is None:
+        import torch
+        import torchaudio  # noqa: F401  (lo necesita el motor)
+        import perth
+        # Chatterbox rompe la carga en CPU sin CUDA: el watermarker real es None.
+        perth.PerthImplicitWatermarker = perth.DummyWatermarker
+        from chatterbox import ChatterboxMultilingualTTS
+        modelo = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+        _CHATTERBOX = (modelo, modelo.sr)
+    return _CHATTERBOX
+
+
+def _es_voz_robin(voz):
+    """True si la voz seleccionada es la clonada de Robin (Chatterbox)."""
+    return bool(voz) and voz.strip().lower() == _VOZ_ROBIN
+
+
+def _ruta_referencia():
+    return os.path.join(_DIR, "data", "robin_ref.wav")
+
+
+def _sintetizar_chatterbox(texto, ruta):
+    """Sintetiza `texto` con la voz clonada de Robin y lo guarda en `ruta` (.wav)."""
+    modelo, sr = _obtener_chatterbox()
+    wav = modelo.generate(
+        text=texto,
+        language_id="es",
+        audio_prompt_path=_ruta_referencia(),
+        temperature=0.8,
+        repetition_penalty=2.0,
+        min_p=0.05,
+        top_p=1.0,
+    )
+    wav = wav.squeeze(0).cpu()
+    import torchaudio
+    torchaudio.save(ruta, wav.unsqueeze(0), sr, encoding="PCM_S", bits_per_sample=16)
+
+
 def _obtener_kokoro():
     """Devuelve (KPipeline, sf, np, sample_rate) para una voz de Kokoro como 'ef_dora'."""
     global _KOKORO, _KOKORO_PIPELINE, _KOKORO_SR
@@ -46,8 +93,20 @@ def _obtener_kokoro():
 
 
 def _es_voz_kokoro(voz):
-    """Las voces edge-tts contienen '.Neural'; el resto se tratan como Kokoro."""
-    return bool(voz) and ".Neural" not in voz
+    """True si `voz` es una voz local de Kokoro (prefijo 'ef_' o 'em_').
+    Las de edge-tts llevan '.Neural' y la clonada de Robin se trata aparte."""
+    v = (voz or "").strip().lower()
+    return v[:3] in ("ef_", "em_")
+
+
+def _es_voz_edge(voz):
+    """True si `voz` es una voz online de edge-tts (contiene '.Neural')."""
+    return bool(voz) and ".Neural" in voz
+
+
+def _usa_wav(voz):
+    """Las voces locales (Kokoro, Chatterbox) generan .wav; edge-tts genera .mp3."""
+    return _es_voz_robin(voz) or _es_voz_kokoro(voz)
 
 # Voz configurable desde "voz_config.json" (voz, ritmo, tono, idioma STT).
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +129,14 @@ _mutex = threading.Lock()
 
 # ---------------------------- HABLAR (TTS) ----------------------------
 def _sintetizar(texto, ruta):
+    if _es_voz_robin(VOZ):
+        try:
+            _sintetizar_chatterbox(texto, ruta)
+        except Exception:
+            if edge_tts is None:
+                raise RuntimeError("no hay motor TTS disponible (chatterbox y edge-tts fallaron)")
+            _sintetizar_edge(texto, ruta)
+        return
     if _es_voz_kokoro(VOZ):
         try:
             KPipeline, sf, np, sr = _obtener_kokoro()
@@ -96,7 +163,8 @@ def _sintetizar(texto, ruta):
 
 
 def _sintetizar_edge(texto, ruta, voz=None):
-    voice = voz or ("es-MX-DaliaNeural" if _es_voz_kokoro(VOZ) else VOZ)
+    voice = voz or ("es-MX-DaliaNeural"
+                    if (_es_voz_kokoro(VOZ) or _es_voz_robin(VOZ)) else VOZ)
     parametros = {}
     if RITMO:
         parametros["rate"] = RITMO
@@ -106,13 +174,38 @@ def _sintetizar_edge(texto, ruta, voz=None):
     com.save_sync(ruta)
 
 
+def _formato_audio(ruta):
+    """Detecta el formato real por la cabecera, no por la extensión.
+    Devuelve el 'type' de MCI: 'waveaudio' para WAV, 'mpegvideo' para MP3."""
+    try:
+        with open(ruta, "rb") as f:
+            cabeza = f.read(12)
+        if cabeza[:4] == b"RIFF" and cabeza[8:12] == b"WAVE":
+            return "waveaudio"
+        return "mpegvideo"
+    except Exception:
+        return "waveaudio" if ruta.lower().endswith(".wav") else "mpegvideo"
+
+
 def _reproducir(ruta):
+    """Reproduce `ruta` (WAV o MP3). Para WAV usa winsound (muy fiable en
+    Windows); para MP3 usa MCI. Lanza excepción si no se puede reproducir."""
+    if _formato_audio(ruta) == "waveaudio":
+        import winsound
+        # winsound.PlaySound devuelve None en éxito y False si falla.
+        ok = winsound.PlaySound(ruta, winsound.SND_FILENAME)
+        if ok is False:
+            raise RuntimeError("winsound no pudo reproducir el audio")
+        return
     mci = ctypes.windll.winmm.mciSendStringW
     alias = "asistente_tts"
-    tipo = "waveaudio" if ruta.lower().endswith(".wav") else "mpegvideo"
+    mciopen = mci(f'open "{ruta}" type mpegvideo alias {alias}', None, 0, None)
+    if mciopen != 0:
+        raise RuntimeError(f"MCI no pudo abrir el audio: code {mciopen}")
     try:
-        mci(f'open "{ruta}" type {tipo} alias {alias}', None, 0, None)
-        mci(f"play {alias} wait", None, 0, None)
+        err = mci(f"play {alias} wait", None, 0, None)
+        if err != 0:
+            raise RuntimeError(f"MCI no pudo reproducir el audio: code {err}")
     finally:
         try:
             mci(f"close {alias}", None, 0, None)
@@ -130,7 +223,7 @@ def hablar(texto, on_inicio=None, on_fin=None):
     if not _existe_voz(texto):
         return
     with _mutex:
-        if edge_tts is None:
+        if _es_voz_edge(VOZ) and edge_tts is None:
             return
 
     def trabajo():
@@ -139,7 +232,7 @@ def hablar(texto, on_inicio=None, on_fin=None):
                 on_inicio()
             except Exception:
                 pass
-        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _es_voz_kokoro(VOZ) else ".mp3"))
+        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
         os.close(fd)
         try:
             _sintetizar(texto, ruta)
@@ -165,9 +258,9 @@ def hablar_sincrono(texto):
     if not _existe_voz(texto):
         return
     with _mutex:
-        if edge_tts is None:
+        if _es_voz_edge(VOZ) and edge_tts is None:
             return
-        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _es_voz_kokoro(VOZ) else ".mp3"))
+        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
         os.close(fd)
         try:
             _sintetizar(texto, ruta)

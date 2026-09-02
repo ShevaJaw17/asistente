@@ -36,19 +36,20 @@ PERFILES = {
     },
 }
 
-# Tono de voz TTS por perfil (voz Kokoro-82M local; 'ef_dora' es la femenina de español).
+# Tono de voz TTS por perfil ('robin' es la voz clonada de Robin vía Chatterbox;
+# Kokoro-82M 'ef_dora' queda como alternativa local femenina de español).
 _VOZ_POR_PERFIL = {
-    "erudita": "ef_dora",
-    "amistosa": "ef_dora",
-    "formal": "ef_dora",
-    "graciosa": "ef_dora",
+    "erudita": "robin",
+    "amistosa": "robin",
+    "formal": "robin",
+    "graciosa": "robin",
 }
 
 # Perfil y configuración por defecto.
 _DEFAULT = {
     "personalidad": "erudita",
     "nombre": "Robin",
-    "voz": "ef_dora",
+    "voz": "robin",
     "idioma": "es",
     "despertador": "",
 }
