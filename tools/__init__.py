@@ -44,6 +44,14 @@ def _descubrir_modulos():
 
 _descubrir_modulos()
 
+# Precarga (en background) del encoder de embeddings para memoria semántica,
+# para que la primera búsqueda no tarde ~15s dentro de un turno del chat.
+try:
+    import tools.memoria_semantica as _ms
+    _ms.precargar_modelo()
+except Exception:
+    pass
+
 
 def get_herramientas():
     """Lista JSON Schema de tools para enviar al modelo."""

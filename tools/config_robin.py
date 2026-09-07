@@ -22,9 +22,60 @@ def _actualizar_voz_txt(voz):
         cfg["voz"] = voz
         with open(ruta, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        try:
+            import voz as _voz
+            _voz.aplicar_config({})
+        except Exception:
+            pass
         return True
     except Exception:
         return False
+
+
+@reg.registrar(
+    "configurar_dictado",
+    descripcion="Configura el dictado por voz: duración máxima de la frase (duracion_max en segundos), pausa que cierra la frase (silencio en segundos) y motor de reconocimiento (auto, vosk local sin internet, o google). Ej: 'configura el dictado con motor vosk y silencio de 2 segundos'.",
+    parametros={
+        "duracion_max": {"type": "number", "description": "Segundos máximos de una frase (1-30)."},
+        "silencio": {"type": "number", "description": "Segundos de pausa que cierran la frase (0.5-5)."},
+        "motor_stt": {"type": "string", "description": "Motor STT: 'auto', 'vosk' (local) o 'google'."},
+    },
+)
+def configurar_dictado(duracion_max=None, silencio=None, motor_stt=None):
+    try:
+        import voz as _voz
+    except Exception:
+        return "No puedo aplicar el dictado (módulo de voz no disponible)."
+    cambios = {}
+    if duracion_max is not None:
+        cambios["duracion_max"] = max(1.0, min(30.0, float(duracion_max)))
+    if silencio is not None:
+        cambios["silencio"] = max(0.5, min(5.0, float(silencio)))
+    if motor_stt:
+        motor_stt = str(motor_stt).strip().lower()
+        if motor_stt not in ("auto", "vosk", "google"):
+            return "Motor STT no válido: usa auto, vosk o google."
+        cambios["motor_stt"] = motor_stt
+    if not cambios:
+        return "Dime qué quieres ajustar: duración (duracion_max), silencio o motor (auto/vosk/google)."
+    try:
+        ok = _voz.aplicar_config(cambios)
+    except Exception:
+        ok = False
+    if not ok:
+        return "No pude aplicar el dictado."
+    vcfg = {}
+    try:
+        with open(_ARCHIVO_VOZ, "r", encoding="utf-8") as f:
+            vcfg = json.load(f)
+    except Exception:
+        pass
+    return (
+        "Dictado configurado:\n"
+        f"- Duración máx: {vcfg.get('duracion_max', 20.0)}s\n"
+        f"- Silencio: {vcfg.get('silencio', 1.8)}s\n"
+        f"- Motor STT: {vcfg.get('motor_stt', 'auto')}"
+    )
 
 
 @reg.registrar(
@@ -42,8 +93,8 @@ def listar_perfiles():
 
 @reg.registrar(
     "cambiar_personalidad",
-    descripcion="Cambia la personalidad de Robin. Perfiles: 'erudita', 'amistosa', 'formal' o 'graciosa'.",
-    parametros={"perfil": {"type": "string", "description": "Nombre del perfil: erudita, amistosa, formal o graciosa.", "requerido": True}},
+    descripcion="Cambia la personalidad de Robin. Perfiles: 'nico_robin' (One Piece), 'erudita', 'amistosa', 'formal' o 'graciosa'.",
+    parametros={"perfil": {"type": "string", "description": "Nombre del perfil: nico_robin, erudita, amistosa, formal o graciosa.", "requerido": True}},
 )
 def cambiar_personalidad(perfil):
     perfil_norm = (perfil or "").strip().lower()
@@ -126,9 +177,18 @@ def listar_voces():
 def ver_config():
     cfg = personalidad.obtener_config()
     perfil, _ = personalidad.obtener_personalidad()
+    vcfg = personalidad.obtener_config()
+    try:
+        with open(_ARCHIVO_VOZ, "r", encoding="utf-8") as f:
+            import json as _json
+            vcfg = _json.load(f)
+    except Exception:
+        pass
     return (
         f"Configuración de Robin:\n"
         f"- Nombre: {cfg.get('nombre')}\n"
         f"- Personalidad: {perfil} ({personalidad.PERFILES.get(perfil, {}).get('etiqueta')})\n"
-        f"- Voz TTS: {cfg.get('voz')}"
+        f"- Voz TTS: {vcfg.get('voz')} (idioma dictado: {vcfg.get('idioma_stt')})\n"
+        f"- Motor de reconocimiento: {vcfg.get('motor_stt', 'auto')}\n"
+        f"- Dictado: duración máx {vcfg.get('duracion_max', 20.0)}s, silencio {vcfg.get('silencio', 1.8)}s"
     )

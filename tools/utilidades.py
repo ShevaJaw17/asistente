@@ -60,7 +60,11 @@ def copiar(texto):
 
 @reg.registrar(
     "ejecutar_comando",
-    descripcion="Ejecuta un comando del sistema (cmd). Pide confirmación al usuario. Úsalo para tareas como 'dir', 'ipconfig', crear carpetas, etc.",
+    descripcion=(
+        "Ejecuta un comando del sistema en cmd (dir, ipconfig, crear carpeta...). "
+        "Pide confirmación. NO usar para abrir aplicaciones: eso es abrir_app. "
+        "Prefiere ejecutar_comando solo si no existe una tool específica."
+    ),
     parametros={"comando": {"type": "string", "description": "El comando a ejecutar.", "requerido": True}},
     requiere_confirmacion=True,
 )

@@ -4,6 +4,9 @@
 # Núcleo / HTTP
 httpx>=0.28
 pydantic>=2.0
+# Memoria semántica (embeddings multilingües; fallback TF-IDF si no está)
+
+sentence-transformers>=3.0
 
 # Mensajería del chat y tools del asistente.py
 numpy>=1.26
@@ -11,10 +14,18 @@ numpy>=1.26
 # Visión / imágenes (capturas de pantalla, assets Live2D)
 pillow>=12
 
+# Documentos Word (.docx)
+python-docx>=1.2
+# Documentos PDF (.pdf) y hojas de cálculo (.xlsx)
+reportlab>=4.0
+openpyxl>=3.1
+
 # Voz
 edge-tts>=7.2
 SpeechRecognition>=3.17
 PyAudio>=0.2.14
+# STT local offline (opcional, sin internet). Model: pip install vosk + data/vosk/
+vosk>=0.3.45
 
 # Voz local más natural (Kokoro-82M). Requiere espeak-ng instalado en el sistema
 # (winget install eSpeak-NG.eSpeak-NG) para el G2P en español.

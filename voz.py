@@ -62,16 +62,18 @@ def _ruta_referencia():
 
 
 def _sintetizar_chatterbox(texto, ruta):
-    """Sintetiza `texto` con la voz clonada de Robin y lo guarda en `ruta` (.wav)."""
+    """Sintetiza `texto` con la voz clonada de Robin y lo guarda en `ruta` (.wav).
+    Parámetros configurables en voz_config.json (chatterbox_temperature, ...):
+    bajas temperaturas/top_p = voz más estable en frases largas."""
     modelo, sr = _obtener_chatterbox()
     wav = modelo.generate(
         text=texto,
         language_id="es",
         audio_prompt_path=_ruta_referencia(),
-        temperature=0.8,
-        repetition_penalty=2.0,
-        min_p=0.05,
-        top_p=1.0,
+        temperature=CHATTERBOX_TEMPERATURE,
+        repetition_penalty=CHATTERBOX_REPETITION,
+        min_p=CHATTERBOX_MIN_P,
+        top_p=CHATTERBOX_TOP_P,
     )
     wav = wav.squeeze(0).cpu()
     import torchaudio
@@ -123,8 +125,163 @@ VOZ = _CONFIG.get("voz", "es-MX-DaliaNeural")
 RITMO = _CONFIG.get("ritmo", "-10%")
 TONO = _CONFIG.get("tono", "+0Hz")
 IDIOMA_STT = _CONFIG.get("idioma_stt", "es-MX")
+# Grabación por voz: duración máx. de instrucción y pausa que cierra la frase.
+DURACION_MAX = _CONFIG.get("duracion_max", 20.0)
+SILENCIO = _CONFIG.get("silencio", 1.8)
+# Motor STT: "auto" usa Vosk local si está disponible (sin internet), sino Google.
+# También se puede forzar "vosk" o "google" desde voz_config.json.
+MOTOR_STT = _CONFIG.get("motor_stt", "auto")
+# Parámetros de síntesis de Chatterbox (voz clonada): valores más bajos de
+# temperature / top_p hacen la voz más estable en frases largas.
+CHATTERBOX_TEMPERATURE = _CONFIG.get("chatterbox_temperature", 0.6)
+CHATTERBOX_REPETITION = _CONFIG.get("chatterbox_repetition", 2.2)
+CHATTERBOX_TOP_P = _CONFIG.get("chatterbox_top_p", 0.9)
+CHATTERBOX_MIN_P = _CONFIG.get("chatterbox_min_p", 0.05)
 
-_mutex = threading.Lock()
+_lock_config = threading.Lock()
+
+
+def _recargar_config():
+    """Relee voz_config.json y refleja los cambios en las variables de módulo
+    (permite cambiar voz/dictado/motor en vivo sin reiniciar)."""
+    global VOZ, RITMO, TONO, IDIOMA_STT, DURACION_MAX, SILENCIO, MOTOR_STT
+    global CHATTERBOX_TEMPERATURE, CHATTERBOX_REPETITION, CHATTERBOX_TOP_P, CHATTERBOX_MIN_P
+    global _CONFIG
+    nuevo = {}
+    try:
+        with open(ARCHIVO_CONFIG, "r", encoding="utf-8") as f:
+            nuevo = json.load(f)
+    except Exception:
+        return False
+    with _lock_config:
+        _CONFIG = nuevo
+        VOZ = nuevo.get("voz", VOZ)
+        RITMO = nuevo.get("ritmo", RITMO)
+        TONO = nuevo.get("tono", TONO)
+        IDIOMA_STT = nuevo.get("idioma_stt", IDIOMA_STT)
+        DURACION_MAX = nuevo.get("duracion_max", DURACION_MAX)
+        SILENCIO = nuevo.get("silencio", SILENCIO)
+        MOTOR_STT = nuevo.get("motor_stt", MOTOR_STT)
+        CHATTERBOX_TEMPERATURE = nuevo.get("chatterbox_temperature", CHATTERBOX_TEMPERATURE)
+        CHATTERBOX_REPETITION = nuevo.get("chatterbox_repetition", CHATTERBOX_REPETITION)
+        CHATTERBOX_TOP_P = nuevo.get("chatterbox_top_p", CHATTERBOX_TOP_P)
+        CHATTERBOX_MIN_P = nuevo.get("chatterbox_min_p", CHATTERBOX_MIN_P)
+    return True
+
+
+def aplicar_config(cambios):
+    """Aplica cambios a voz_config.json (en vivo) y refresca el módulo.
+    `cambios` es dict de claves conocidas. Devuelve True si hubo cambio."""
+    with _lock_config:
+        nuevo = dict(_CONFIG)
+        for k, v in (cambios or {}).items():
+            if v is not None:
+                nuevo[k] = v
+    try:
+        with open(ARCHIVO_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(nuevo, f, ensure_ascii=False, indent=2)
+    except Exception:
+        return False
+    return _recargar_config()
+
+# Cache de TTS: guarda el audio sintetizado por hash del texto en data/cache_voz/.
+# Las frases frecuentes (saludos, ack) no se vuelven a sintetizar en CPU.
+DIR_CACHE_VOZ = os.path.join(_DIR, "data", "cache_voz")
+
+# Tamaño máximo del caché (número de archivos). A partir de ese límite se
+# elimina el archivo más antiguo al escribir uno nuevo (mantiene acotado).
+_CACHE_LIMITE = 200
+
+
+def _clave_cache(texto):
+    import hashlib
+    return hashlib.sha1(texto.encode("utf-8")).hexdigest()
+
+
+def _ruta_cache(texto):
+    ext = ".wav" if _usa_wav(VOZ) else ".mp3"
+    return os.path.join(DIR_CACHE_VOZ, _clave_cache(texto) + ext)
+
+
+def _sintetizar_con_cache(texto):
+    """Sintetiza `texto` y devuelve la ruta del audio (cacheado en disco).
+    Si el texto ya fue sintetizado, no regraba; reutiliza el WAV/MP3."""
+    try:
+        os.makedirs(DIR_CACHE_VOZ, exist_ok=True)
+    except Exception:
+        pass
+    ruta = _ruta_cache(texto)
+    if os.path.exists(ruta) and os.path.getsize(ruta) > 0:
+        return ruta
+    fd, ruta_temp = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
+    os.close(fd)
+    _sintetizar(texto, ruta_temp)
+    try:
+        os.replace(ruta_temp, ruta)
+    except Exception:
+        os.remove(ruta_temp)
+        raise
+    _purgar_cache_si_procede()
+    return ruta
+
+
+def _purgar_cache_si_procede():
+    """Si el caché excede _CACHE_LIMITE archivos, borra los más antiguos."""
+    try:
+        archivos = [os.path.join(DIR_CACHE_VOZ, f)
+                    for f in os.listdir(DIR_CACHE_VOZ)]
+    except Exception:
+        return
+    if len(archivos) <= _CACHE_LIMITE:
+        return
+    archivos.sort(key=lambda r: os.path.getmtime(r))
+    for r in archivos[:len(archivos) - _CACHE_LIMITE]:
+        try:
+            os.remove(r)
+        except Exception:
+            pass
+
+
+_CONTADOR_VOZ = 0
+_lock_contador = threading.Lock()
+
+
+def _marcar_voz_activa(activa):
+    """Lleva la cuenta de reproducciones en curso (para evitar doble audio)."""
+    global _CONTADOR_VOZ
+    with _lock_contador:
+        _CONTADOR_VOZ += 1 if activa else -1
+        if _CONTADOR_VOZ < 0:
+            _CONTADOR_VOZ = 0
+
+
+def hay_voz_activa():
+    """True si hay TTS reproduciéndose ahora mismo (o en la cola de voz)."""
+    with _lock_contador:
+        return _CONTADOR_VOZ > 0 or not _COLA_VOZ.empty()
+
+
+def _hablar_core(texto, on_inicio=None, on_fin=None):
+    """Sintetiza (con caché) y reproduce `texto`; llama a los callbacks.
+    Usada por hablar() y por el hilo consumidor de fragmentos."""
+    if on_inicio:
+        try:
+            on_inicio()
+        except Exception:
+            pass
+    _marcar_voz_activa(True)
+    try:
+        ruta = _sintetizar_con_cache(texto)
+        _reproducir(ruta)
+    except Exception:
+        pass
+    finally:
+        _marcar_voz_activa(False)
+    if on_fin:
+        try:
+            on_fin()
+        except Exception:
+            pass
 
 
 # ---------------------------- HABLAR (TTS) ----------------------------
@@ -226,31 +383,8 @@ def hablar(texto, on_inicio=None, on_fin=None):
         if _es_voz_edge(VOZ) and edge_tts is None:
             return
 
-    def trabajo():
-        if on_inicio:
-            try:
-                on_inicio()
-            except Exception:
-                pass
-        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
-        os.close(fd)
-        try:
-            _sintetizar(texto, ruta)
-            _reproducir(ruta)
-        except Exception:
-            pass
-        finally:
-            try:
-                os.remove(ruta)
-            except Exception:
-                pass
-        if on_fin:
-            try:
-                on_fin()
-            except Exception:
-                pass
-
-    threading.Thread(target=trabajo, daemon=True).start()
+    threading.Thread(target=_hablar_core,
+                     args=(texto, on_inicio, on_fin), daemon=True).start()
 
 
 def hablar_sincrono(texto):
@@ -260,16 +394,11 @@ def hablar_sincrono(texto):
     with _mutex:
         if _es_voz_edge(VOZ) and edge_tts is None:
             return
-        fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
-        os.close(fd)
-        try:
-            _sintetizar(texto, ruta)
-            _reproducir(ruta)
-        finally:
-            try:
-                os.remove(ruta)
-            except Exception:
-                pass
+    try:
+        ruta = _sintetizar_con_cache(texto)
+        _reproducir(ruta)
+    except Exception:
+        pass
 
 
 # ----------------- Voz por fragmentos (streaming TTS) -----------------
@@ -290,16 +419,7 @@ def _consumir_voz():
             if texto is None:
                 break
             if _existe_voz(texto):
-                fd, ruta = tempfile.mkstemp(suffix=(".wav" if _usa_wav(VOZ) else ".mp3"))
-                os.close(fd)
-                try:
-                    _sintetizar(texto, ruta)
-                    _reproducir(ruta)
-                finally:
-                    try:
-                        os.remove(ruta)
-                    except Exception:
-                        pass
+                _hablar_core(texto)
         except Exception:
             pass
         finally:
@@ -346,12 +466,68 @@ def detener_voz():
 
 
 # ---------------------------- ESCUCHAR (STT) ----------------------------
-def _grabar(duracion_max=8.0, silencio=1.0):
+DIR_MODELO_VOSK = os.path.join(_DIR, "data", "vosk", "vosk-model-small-es-0.3")
+_vosk_modelo = None
+_lock_vosk = threading.Lock()
+
+
+def _vosk_disponible():
+    """True si vosk está instalado y el modelo es-0.3 está en disco."""
+    try:
+        import vosk  # noqa: F401
+    except Exception:
+        return False
+    return os.path.exists(os.path.join(DIR_MODELO_VOSK, "Gr.fst")) and \
+        os.path.exists(os.path.join(DIR_MODELO_VOSK, "final.mdl"))
+
+
+def _motor_stt_activo():
+    if MOTOR_STT == "vosk":
+        return "vosk" if _vosk_disponible() else "google"
+    if MOTOR_STT == "google":
+        return "google"
+    # auto: Vosk local si se puede, Google como respaldo
+    return "vosk" if _vosk_disponible() else "google"
+
+
+def _obtener_vosk():
+    """Carga perezosa del modelo Vosk (una vez). Necesita vosk instalado."""
+    global _vosk_modelo
+    if _vosk_modelo is not None:
+        return _vosk_modelo
+    with _lock_vosk:
+        if _vosk_modelo is None:
+            from vosk import Model
+            _vosk_modelo = Model(DIR_MODELO_VOSK)
+    return _vosk_modelo
+
+
+def _transcribir_vosk(audio):
+    """Transcribe `audio` (sr.AudioData) con Vosk local; sin internet."""
+    from vosk import KaldiRecognizer
+    rec = KaldiRecognizer(_obtener_vosk(), 16000)
+    datos = audio.get_raw_data(convert_rate=16000, convert_width=2, convert_channels=1)
+    if rec.AcceptWaveform(datos):
+        res = json.loads(rec.Result())
+    else:
+        res = json.loads(rec.FinalResult())
+    return (res.get("text") or "").strip()
+
+
+def _grabar(duracion_max=None, silencio=None):
     """Graba con el micrófono y devuelve sr.AudioData."""
     if sr is None or pyaudio is None:
         raise RuntimeError("speech_recognition/pyaudio no disponible")
+    if duracion_max is None:
+        duracion_max = DURACION_MAX
+    if silencio is None:
+        silencio = SILENCIO
     r = sr.Recognizer()
     r.pause_threshold = silencio
+    # Ajusta los umbrales de energía y silencio para frases largas naturales.
+    r.energy_threshold = 300
+    r.dynamic_energy_threshold = True
+    r.dynamic_energy_adjustment_damping = 0.15
     with sr.Microphone() as fuente:
         r.adjust_for_ambient_noise(fuente, duration=0.6)
         try:
@@ -361,14 +537,28 @@ def _grabar(duracion_max=8.0, silencio=1.0):
     return r, audio
 
 
-def escuchar(duracion_max=8.0, silencio=1.0):
-    """Escucha y devuelve (texto, error). texto="" si no entendió, error con descripción."""
+def escuchar(duracion_max=None, silencio=None):
+    """Escucha y devuelve (texto, error). texto="" si no entendió, error con descripción.
+    Usa Vosk local si está disponible/configurado; Google es-MX como respaldo."""
+    _recargar_config()
     try:
         r, audio = _grabar(duracion_max, silencio)
     except TimeoutError:
         return "", "silencioso"
     except Exception as e:
         return "", f"micrófono: {e}"
+    motor = _motor_stt_activo()
+    if motor == "vosk":
+        try:
+            texto = _transcribir_vosk(audio)
+            return texto, None
+        except Exception as e:
+            if MOTOR_STT in ("auto",):
+                pass  # fallback a Google
+            else:
+                return "", f"vosk: {e}"
+    if sr is None:
+        return "", "speech_recognition no disponible"
     try:
         texto = r.recognize_google(audio, language=IDIOMA_STT)
         return texto, None

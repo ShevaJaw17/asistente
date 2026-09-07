@@ -20,3 +20,9 @@ proactividad.json
 tareas_programadas.json
 voz_config.json
 config_vtube.json
+contexto_resumen.json
+_telegram_log*
+
+# Datos locales (no versionar)
+data/
+data/**

@@ -51,7 +51,12 @@ def _obtener_recordatorios():
 
 @reg.registrar(
     "resumen_diario",
-    descripcion="Prepara el resumen del día: fecha, clima, agenda/tareas programadas, tareas pendientes y recordatorios activos. Ideal para '¿cómo va mi día?'.",
+    descripcion=(
+        "Prepara el resumen del día: fecha, clima, agenda/tareas programadas, tareas "
+        "pendientes y recordatorios activos. Úsala cuando el usuario pida 'resumen del día', "
+        "'cómo va mi día', 'qué tengo hoy', 'qué hay que hacer hoy', 'mi día'. "
+        "NO escribir texto solo: llama a esta herramienta."
+    ),
     parametros={"ciudad": {"type": "string", "description": "Ciudad para el clima (opcional, por defecto Madrid)."}},
 )
 def resumen_diario(ciudad="Madrid"):

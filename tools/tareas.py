@@ -13,7 +13,12 @@ def guardar(t):
 
 @reg.registrar(
     "agregar_tarea",
-    descripcion="Añade una nueva tarea a la lista de pendientes.",
+    descripcion=(
+        "Añade un pendiente por hacer a la lista de tareas. Úsala SIEMPRE que el usuario "
+        "diga 'añade/anota/agrega la tarea', 'apunta X', 'tengo que/pendiente hacer X'. "
+        "Ejemplos: 'añade comprar leche', 'anota: llamar al banco'. "
+        "NO confundir con agregar_recordatorio (avisos con hora) ni con agenda recurrente."
+    ),
     parametros={"tarea": {"type": "string", "description": "La descripción de la tarea.", "requerido": True}},
 )
 def agregar(tarea):

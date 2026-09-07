@@ -74,7 +74,11 @@ def listar_apps():
 
 @reg.registrar(
     "abrir_app",
-    descripcion="Abre una aplicación. Si no está en la lista blanca, pedirá confirmación. Ejemplos: 'navegador', 'calculadora', 'bloc de notas'.",
+    descripcion=(
+        "Abre una APLICACIÓN o programa instalado (navegador, calculadora, bloc de notas, "
+        "Word...). Úsala SIEMPRE que pida abrir/abre un programa. NO usar ejecutar_comando "
+        "para esto. Si no está en la lista blanca pedirá confirmación."
+    ),
     parametros={"nombre": {"type": "string", "description": "Nombre de la aplicación a abrir.", "requerido": True}},
 )
 def abrir_app(nombre):

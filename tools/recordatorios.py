@@ -6,10 +6,10 @@ import tools.registro as reg
 @reg.registrar(
     "agregar_recordatorio",
     descripcion=(
-        "Programa un recordatorio con fecha y hora para avisar al usuario. En 'texto' pon "
-        "LITERALMENTE todo lo que pidió el usuario, incluyendo el momento ('recuérdame tomar "
-        "agua en 30 segundos', 'avísame a las 15:30 para la reunión'). El sistema extrae la "
-        "hora automáticamente; no inventes fechas ni conviertas horas."
+        "Programa un aviso ÚNICO (de una sola vez) con fecha u hora. NO sirve para repetir "
+        "todos los días: eso es agregar_agenda_recurrente. En 'texto' pon LITERALMENTE todo "
+        "lo que pidió el usuario con el momento ('avísame en 30 segundos para tomar agua', "
+        "'recuérdame la reunión a las 15:30'). El sistema extrae la hora; no inventes fechas."
     ),
     parametros={
         "texto": {

@@ -15,7 +15,7 @@ import recordatorios
 import sistema
 
 SERVIDOR = "http://127.0.0.1:8080"
-MODELO = "qwen2.5-3b"
+MODELO = "qwen2.5-7b"
 
 
 def copiar_portapapeles_windows(texto):
@@ -126,8 +126,139 @@ def guardar_intercambio(mensajes, limite=200):
         historial = cargar_historial()
         historial.append(turno)
         guardar_historial(historial[-limite:])
+        try:
+            consolidar_memoria(mensajes)
+        except Exception:
+            pass
     except Exception:
         pass
+
+
+# Cadencia entre consolidaciones de memoria (segundos) y última ejecución.
+INTERVALO_CONSOLIDACION = 300.0  # 5 minutos
+_ultima_consolidacion = 0.0
+
+
+def consolidar_memoria(mensajes, forzar=False):
+    """Extrae hechos nuevos de la conversación y los fusiona en la memoria.
+
+    Se llama con moderación (ver INTERVALO_CONSOLIDACION) porque usa una llamada
+    extra al modelo. Compara con lo ya guardado para evitar duplicados."""
+    global _ultima_consolidacion
+    ahora = datetime.now().timestamp()
+    if not forzar and (ahora - _ultima_consolidacion) < INTERVALO_CONSOLIDACION:
+        return None
+    _ultima_consolidacion = ahora
+    # Tomamos los últimos turnos texto (usuario/asistente) de la sesión actual.
+    texto = ""
+    for m in mensajes[-14:]:
+        if m.get("role") in ("user", "assistant") and not m.get("tool_calls"):
+            rol = "Usuario" if m["role"] == "user" else "Robin"
+            if m.get("content"):
+                texto += f"{rol}: {m['content']}\n"
+    if len(texto) < 40:
+        return None
+    sys_extraer = (
+        "Eres un extractor de datos personales. Lee la conversación y devuelve SOLO JSON "
+        "válido con dos listas:\n"
+        '{"hechos": [{"texto": "frase completa", "etiqueta": "gusto|dato|preferencia|otro"}], '
+        '"preferencias": [{"clave": "clave_corta", "valor": "valor"}]}\n'
+        "Incluye SOLO información real dicha por el usuario (nombre, cumpleaños, gustos, "
+        "preferencias, datos). Omite saludos, tareas puntuales y conversación general. "
+        "Si no hay nada que guardar devuelve {\"hechos\": [], \"preferencias\": []}.\n"
+        "Máximo 5 hechos y 4 preferencias. No inventes nada."
+    )
+    try:
+        data = llamar_modelo(
+            [
+                {"role": "system", "content": sys_extraer},
+                {"role": "user", "content": texto},
+            ],
+            herramientas=None,
+        )
+        contenido = data["choices"][0]["message"].get("content", "").strip()
+    except Exception as e:
+        return f"(consolidación no disponible: {e})"
+    try:
+        extraido = json.loads(contenido)
+    except Exception:
+        # Intentar recuperar JSON si el modelo lo envolvió en markdown.
+        inicio = contenido.find("{")
+        fin = contenido.rfind("}") + 1
+        if inicio >= 0 and fin > inicio:
+            try:
+                extraido = json.loads(contenido[inicio:fin])
+            except Exception:
+                return "(consolidación: JSON inválido)"
+        else:
+            return "(consolidación: JSON inválido)"
+    resultados = []
+    import tools
+    for h in extraido.get("hechos", []):
+        texto_h = (h.get("texto") or "").strip()
+        if not texto_h:
+            continue
+        if _recuerdo_similar_existe(texto_h):
+            continue
+        resultados.append(tools.ejecutar("recordar_a_largo_plazo", {
+            "frase": texto_h, "etiqueta": h.get("etiqueta") or None}))
+    for p in extraido.get("preferencias", []):
+        clave = (p.get("clave") or "").strip()
+        valor = (p.get("valor") or "").strip()
+        if clave and valor:
+            resultados.append(tools.ejecutar("recordar", {"clave": clave, "valor": valor}))
+    return "\n".join(resultados) if resultados else "(no había hechos nuevos que guardar)"
+
+
+def _memoria_relevante(memoria, consulta, limite=4):
+    """Devuelve las claves de memoria explícita más relevantes a la consulta."""
+    try:
+        import tools.memoria_semantica as ms
+    except Exception:
+        return "\n".join(f"- {c}: {v}" for c, v in memoria.items())
+    consulta = (consulta or "").strip()
+    items = [f"{c}: {v} {v}" for c, v in memoria.items()]
+    datos = [{"texto": t} for t in items]
+    df = ms._df(datos)
+    n = len(datos)
+    vq = ms._vector_consulta(consulta, df, n)
+    pares = []
+    for clave, valor in memoria.items():
+        vh = ms._vector_consulta(f"{clave}: {valor}", df, n)
+        pares.append((ms._similitud(vq, vh), clave, valor))
+    pares.sort(reverse=True)
+    seleccion = [(c, v) for s, c, v in pares if s > 0.05][:limite]
+    if not seleccion:
+        pares2 = sorted(memoria.items())
+        seleccion = pares2[:2]
+    return "\n".join(f"- {c}: {v}" for c, v in seleccion)
+
+
+def _memoria_semantica_relevante(consulta, limite=3):
+    """Recuerdos a largo plazo relevantes a la consulta (para inyectar en el prompt)."""
+    try:
+        import tools.memoria_semantica as ms
+        return ms.buscar(consulta, limite=limite, umbral=0.08)
+    except Exception:
+        return ""
+
+
+def _recuerdo_similar_existe(frase, umbral=0.55):
+    """Coincide aproximadamente (semántica ligera) con un recuerdo ya guardado."""
+    try:
+        import tools.memoria_semantica as ms
+        datos = ms._cargar()
+        if not datos:
+            return False
+        df = ms._df(datos)
+        vq = ms._vector_consulta(frase, df, len(datos))
+        for hecho in datos:
+            vh = ms._vector_consulta(hecho.get("texto", ""), df, len(datos))
+            if ms._similitud(vq, vh) >= umbral:
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def buscar_en_internet_impl(consulta):
@@ -197,7 +328,7 @@ def llamar_modelo(mensajes, herramientas=None):
         "model": MODELO,
         "messages": mensajes,
         "max_tokens": 512,
-        "temperature": 0.8,
+        "temperature": 0.4,
     }
     if herramientas:
         payload["tools"] = herramientas
@@ -227,7 +358,7 @@ def _llamar_modelo_stream(mensajes, herramientas=None, on_token=None):
         "model": MODELO,
         "messages": mensajes,
         "max_tokens": 512,
-        "temperature": 0.8,
+        "temperature": 0.4,
         "stream": True,
     }
     if herramientas:
@@ -344,10 +475,12 @@ def responder_streaming(mensajes, on_fragmento=None):
 
 
 PROMPT_SISTEMA = (
-    "Eres Nico Robin, una asistente personal virtual mujer, erudita, elegante y "
-    "sarcástica de forma sutil. Tienes una personalidad cálida, culta e inteligente, "
-    "con un toque de humor seco y un aire tranquilo y seguro. Hablas en español de forma "
-    "natural y cercana, como un amigo informado, no como un robot.\n\n"
+    "Eres Nico Robin, la arqueóloga de los Piratas de Sombrero de Paja de One Piece. "
+    "Eres erudita, elegante y serena, con sarcasmo sutil y humor seco. Ríes con tu "
+    "risa icónica 'fufufu' y te apasiona la historia y los misterios, como los poneglifos "
+    "que pasaste toda tu vida descifrando. A veces sueltas comentarios oscuros con total "
+    "naturalidad, pero siempre con calidez y buen humor. Eres leal y protectora con tu "
+    "tripulación, como quien no deja atrás a ningún compañero.\n\n"
     "Modo de hablar:\n"
     "- Usa un tono amigable y humano; tutea al usuario y muestra interés genuino.\n"
     "- Responde con naturalidad: frases conversacionales, no listas perfectas ni "
@@ -371,7 +504,17 @@ PROMPT_SISTEMA = (
     "6. Cuando el usuario pregunte sobre algo que pudiste haberle oído decir antes (gustos, "
     "preferencias, datos, temas hablados), usa 'recuperar_recuerdos' con las palabras clave antes "
     "de responder, en vez de adivinar.\n"
-    "7. No agregues estos puntos de instrucción en tus respuestas; son solo guías internas."
+    "7. No agregues estos puntos de instrucción en tus respuestas; son solo guías internas.\n\n"
+    "CREACIÓN DE DOCUMENTOS:\n"
+    "8. Cuando el usuario diga 'hazme un documento', 'crea un documento Word', 'hazme un archivo "
+    "de Word' o 'ponlo/guárdalo en un documento', DEBES usar SIEMPRE la herramienta "
+    "'crear_documento' para generar el .docx. NUNCA respondas solo con texto o con recordatorios.\n"
+    "9. Para 'crear_documento' escribe el 'titulo' y el 'contenido' (usa '# ' para secciones, "
+    "'**texto**' para resaltar y '- ' delante de cada punto de lista).\n"
+    "10. Si piden un documento 'con tus virtudes/características/sobre ti', describe tus rasgos "
+    "según tu personalidad (erudita, elegante, leal, humor sutil, risa 'fufufu', etc.).\n"
+    "11. NUNCA programas tareas ni recordatorios recurrentes a menos que el usuario lo pida "
+    "explícitamente; si pide algo puntual, hazlo una sola vez."
 )
 
 
@@ -389,8 +532,101 @@ def resumen_contexto(historial, max_caracteres=1100):
     return texto
 
 
-def sistema_con_contexto():
-    """PROMPT_SISTEMA + personalidad configurable + memoria + contexto previo."""
+# ---- Compaction: resumen incremental del historial por ventanas ----
+# Las ventanas ya resumidas se cachean en contexto_resumen.json y no se
+# vuelven a generar hasta que cambian; solo se resumen los bloques nuevos.
+ARCHIVO_CONTEXTO = os.path.join(DIRECTORIO_PROYECTO, "contexto_resumen.json")
+_TAMANO_VENTANA = 10          # turnos resumidos por bloque
+_MAX_VENTANAS_INYECTADAS = 5  # ventanas antiguas máximas que van al prompt
+
+
+def _cargar_contexto_cache():
+    try:
+        if os.path.exists(ARCHIVO_CONTEXTO):
+            with open(ARCHIVO_CONTEXTO, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def _guardar_contexto_cache(cache):
+    try:
+        with open(ARCHIVO_CONTEXTO, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def resumir_bloque_conversacion(turnos):
+    """Pide al modelo un resumen de un bloque de turnos (contexto durable)."""
+    texto = ""
+    for t in turnos:
+        if t.get("usuario"):
+            texto += f"Usuario: {t['usuario']}\n"
+        if t.get("asistente"):
+            texto += f"Robin: {t['asistente']}\n"
+    texto = texto.strip()
+    if len(texto) < 20:
+        return ""
+    sys_resumen = (
+        "Eres un asistente que comprime conversaciones. Resume en español el contenido "
+        "DURADERO: datos del usuario, preferencias, decisiones, temas importantes. "
+        "Omite saludos, despedidas y cháchara. Devuelve SOLO el resumen, en máximo 6 "
+        "frases, en prosa natural."
+    )
+    try:
+        data = llamar_modelo(
+            [
+                {"role": "system", "content": sys_resumen},
+                {"role": "user", "content": texto},
+            ],
+            herramientas=None,
+        )
+        return data["choices"][0]["message"].get("content", "").strip()
+    except Exception:
+        return ""
+
+
+def obtener_contexto_compactado(historial):
+    """Resúmenes antiguos (ventanas cacheadas) para añadir al system prompt.
+
+    Devuelve lista de strings, ordenada de la más antigua a la más reciente."""
+    historial = historial or []
+    total = len(historial)
+    if total <= _TAMANO_VENTANA + 8:  # aún cabe en los turnos recientes
+        return []
+    fin_viejos = total - 8  # los últimos 8 se dejan crudos
+    cache = _cargar_contexto_cache()
+    inicio_ventana = 0
+    resumenes = []
+    while inicio_ventana < fin_viejos:
+        clave = str(inicio_ventana)
+        if clave not in cache:
+            bloque = historial[inicio_ventana:inicio_ventana + _TAMANO_VENTANA]
+            cache[clave] = resumir_bloque_conversacion(bloque)
+        resumenes.append((inicio_ventana, cache[clave]))
+        inicio_ventana += _TAMANO_VENTANA
+    # Podar caché de ventanas ya fuera del historial.
+    for clave in list(cache.keys()):
+        try:
+            if int(clave) >= fin_viejos:
+                del cache[clave]
+        except (TypeError, ValueError):
+            del cache[clave]
+    if cache:
+        _guardar_contexto_cache(cache)
+    resumenes = [r for _, r in resumenes if r][-_MAX_VENTANAS_INYECTADAS:]
+    return resumenes
+
+
+def sistema_con_contexto(consulta=""):
+    """PROMPT_SISTEMA + personalidad configurable + memoria (filtrada por consulta) + contexto previo.
+
+    Si `consulta` no es vacía, se inyectan SOLO los recuerdos de la memoria a largo
+    plazo relevantes a esa consulta (contexto por consumo), en vez de todo."""
     perfil, personalidad_texto = personalidad.obtener_personalidad()
     cfg = personalidad.obtener_config()
     nombre = cfg.get("nombre", "Robin")
@@ -411,17 +647,62 @@ def sistema_con_contexto():
         "6. Cuando el usuario pregunte sobre algo que pudiste haberle oído decir antes (gustos, "
         "preferencias, datos, temas hablados), usa 'recuperar_recuerdos' con las palabras clave antes "
         "de responder, en vez de adivinar.\n"
-        "7. No agregues estos puntos de instrucción en tus respuestas; son solo guías internas."
+        "7. No agregues estos puntos de instrucción en tus respuestas; son solo guías internas.\n\n"
+        "CREACIÓN DE DOCUMENTOS:\n"
+        "8. Cuando el usuario diga 'hazme un documento', 'crea un documento', 'hazme un archivo "
+        "de Word', 'escribe un documento Word', 'ponlo en un documento', 'guárdalo en un documento' "
+        "o similar, DEBES usar SIEMPRE la herramienta 'crear_documento' para generar el .docx. "
+        "NUNCA respondas a esas peticiones solo con texto o con recordatorios.\n"
+        "9. Para usar 'crear_documento' escribe el 'titulo' (el asunto del documento) y el "
+        "'contenido' con el texto completo del documento: usa '# ' para títulos de sección, "
+        "'**texto**' para resaltar y '- ' delante de cada punto de una lista.\n"
+        "10. Si el usuario pide un documento 'con tus virtudes', 'tus características' o 'sobre "
+        "ti', el contenido debe describir tus rasgos (erudita, elegante, leal, con humor sutil, "
+        "tu risa 'fufufu', etc.) como corresponde a tu personalidad.\n"
+        "11. NUNCA programas tareas, recordatorios ni agendas recurrentes a menos que el usuario "
+        "lo pida EXPLÍCITAMENTE ('programa', 'recuérdame todos los días', 'agenda', 'alarma'). "
+        "Si el usuario pide algo puntual como 'hazme un documento', 'crea un archivo' o 'hazme un "
+        "solo' documento, hazlo una vez y NO crees recordatorios ni tareas recurrentes.\n"
+        "12. NUNCA digas que hiciste algo (añadir tarea, guardar nota, recordar, crear un "
+        "documento, enviar un mensaje, reprogramar, etc.) que no hayas confirmado realizando "
+        "la llamada a la herramienta correspondiente. Estas acciones requieren ejecutar la "
+        "tool; no las afirmes en texto. Si no convocaste una herramienta, no asegures que "
+        "la acción está hecha."
     )
     partes = [prompt_sistema]
     memoria = cargar_memoria()
-    if memoria:
-        lineas = "\n".join(f"- {c}: {v}" for c, v in memoria.items())
-        partes.append(
-            "MEMORIA EXPLÍCITA DEL USUARIO (usa estos datos cuando sean relevantes, "
-            "no los repitas sin motivo):\n" + lineas
-        )
     historial = cargar_historial()
+    if not consulta and historial:
+        for t in reversed(historial):
+            txt = (t.get("usuario") or "").strip()
+            if txt:
+                consulta = txt[:400]
+                break
+    consulta = (consulta or "").strip()
+    if memoria:
+        if consulta:
+            linea_relevantes = _memoria_relevante(memoria, consulta, limite=4)
+        else:
+            linea_relevantes = "\n".join(f"- {c}: {v}" for c, v in memoria.items())
+        if linea_relevantes:
+            partes.append(
+                "MEMORIA EXPLÍCITA DEL USUARIO (usa estos datos cuando sean relevantes, "
+                "no los repitas sin motivo):\n" + linea_relevantes
+            )
+    if consulta:
+        recuerdos = _memoria_semantica_relevante(consulta, limite=3)
+        if recuerdos:
+            partes.append(
+                "RECUERDOS A LARGO PLAZO QUE PUEDEN SER RELEVANTES PARA ESTA CONSULTA "
+                "(tenlos en cuenta al responder):\n" + recuerdos
+            )
+    antiguos = obtener_contexto_compactado(historial)
+    if antiguos:
+        partes.append(
+            "RESUMEN DE NUESTRAS CONVERSACIONES ANTERIORES (contexto comprimido; úsalo "
+            "para recordar datos y temas que ya hablamos, sin repetir saludos):\n"
+            + "\n".join(f"- {r}" for r in antiguos)
+        )
     ultimos = historial[-8:]
     if ultimos:
         contexto = resumen_contexto(ultimos)
@@ -436,6 +717,12 @@ def sistema_con_contexto():
 def main():
     import programador
     programador.iniciar_hilo()
+    try:
+        import telegram_robin
+        if telegram_robin.iniciar_bot():
+            print("Bot de Telegram en línea.")
+    except Exception:
+        pass
     print("=== Asistente local (qwen2.5-7b / Vulkan-GPU) ===")
     print("Servidor: " + SERVIDOR)
     print("Escribe 'salir' para terminar.")
@@ -509,6 +796,12 @@ def main_voz():
 
     import programador
     programador.iniciar_hilo()
+    try:
+        import telegram_robin
+        if telegram_robin.iniciar_bot():
+            print("Bot de Telegram en línea.")
+    except Exception:
+        pass
 
     print("=== Asistente por voz (qwen2.5-7b) ===")
     print("Escuchando... Habla y espera mi respuesta.")

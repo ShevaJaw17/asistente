@@ -62,6 +62,16 @@ def _obtener_sesion(client_id):
 def _procesar(mensajes):
     """Responde a una conversación completa manejando el loop de tools
     (misma lógica que interfaz.py)."""
+    try:
+        ultimo_user = ""
+        for m in reversed(mensajes):
+            if m.get("role") == "user":
+                ultimo_user = m.get("content", "")
+                break
+        if mensajes and mensajes[0].get("role") == "system":
+            mensajes[0]["content"] = asistente.sistema_con_contexto(ultimo_user)
+    except Exception:
+        pass
     while True:
         mensaje = asistente.responder_asistente(mensajes)
         mensajes.append(
@@ -359,6 +369,12 @@ if __name__ == "__main__":
 
     import programador
     programador.iniciar_hilo()
+    try:
+        import telegram_robin
+        if telegram_robin.iniciar_bot():
+            print("Bot de Telegram en línea.")
+    except Exception:
+        pass
 
     print("=== Asistente Robin - Servidor Web ===")
     print("Asegúrate de que llama.cpp esté corriendo (iniciar_servidor.bat).")

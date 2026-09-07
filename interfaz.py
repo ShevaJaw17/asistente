@@ -6,7 +6,7 @@ import socket
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, simpledialog
 from datetime import datetime
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -65,6 +65,86 @@ except Exception:
     proactividad = None
 
 
+class IndicadorEstado(tk.Canvas):
+    """Tres lámparas de estado (Pensando/Hablando/Grabando) que se encienden
+    según el estado actual de la barra, con pulso suave sobre la activa."""
+
+    ESTADOS = (
+        ("pensando", "Pensando", "#ffb74d"),
+        ("hablando", "Hablando", "#6fcf97"),
+        ("grabando", "Grabando", "#4fc3f7"),
+    )
+    _APAGADO = "#333333"
+    _BORDE = "#4a4a4a"
+    _PULSO_MS = 450
+
+    def __init__(self, master, **kw):
+        super().__init__(
+            master,
+            width=168,
+            height=40,
+            bg="#2b2b2b",
+            highlightthickness=0,
+            **kw,
+        )
+        self._lamparas = {}
+        self._activo = None
+        self._pulso_alto = True
+        self._tarea_pulso = None
+        for i, (clave, etiqueta, color) in enumerate(self.ESTADOS):
+            cx = 16 + i * 52
+            circulo = self.create_oval(
+                cx - 6, 6, cx + 6, 18,
+                fill=self._APAGADO, outline=self._BORDE, width=1,
+            )
+            self.create_text(
+                cx, 32, text=etiqueta,
+                fill="#9e9e9e", font=("Segoe UI", 7),
+            )
+            self._lamparas[clave] = (circulo, color)
+
+    def set_estado(self, clave):
+        if clave not in ("pensando", "hablando", "grabando"):
+            clave = None
+        self._activo = clave
+        if self._tarea_pulso:
+            try:
+                self.after_cancel(self._tarea_pulso)
+            except Exception:
+                pass
+            self._tarea_pulso = None
+        self._pulso_alto = True
+        for k, (circulo, color) in self._lamparas.items():
+            self.itemconfig(circulo, fill=color if k == clave else self._APAGADO)
+        if clave:
+            self._ciclo_pulso()
+
+    def _ciclo_pulso(self):
+        if not self._activo:
+            return
+        circulo, color = self._lamparas[self._activo]
+        self._pulso_alto = not self._pulso_alto
+        self.itemconfig(
+            circulo,
+            fill=color if self._pulso_alto else self._atenuar(color, 0.55),
+        )
+        try:
+            self._tarea_pulso = self.after(self._PULSO_MS, self._ciclo_pulso)
+        except Exception:
+            self._tarea_pulso = None
+
+    @staticmethod
+    def _atenuar(hex_color, factor):
+        try:
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            return "#%02x%02x%02x" % (
+                int(r * factor), int(g * factor), int(b * factor))
+        except Exception:
+            return hex_color
+
+
 class AsistenteApp:
     def __init__(self, root):
         self.root = root
@@ -84,7 +164,10 @@ class AsistenteApp:
         self.ocupado = False
         self.voz_activa = True
         self._voz_streaming = False
+        self._stream_marcado = False
+        self._stream_mark = None
         self._escuchando = False
+        self._hablando_marcado = False
         asistente.confirmar_accion = self._confirmar_en_gui
 
         self.avatar = avatar.AvatarVTubeStudio(on_estado=self._actualizar_estado_avatar)
@@ -103,6 +186,7 @@ class AsistenteApp:
             self._iniciar_robin_flotante()
         self.root.after(5000, self._revisar_recordatorios)
         self.root.after(7000, self._chequear_servidor)
+        self.root.after(800, self._monitorizar_voz)
         self.root.after(12000, self._bucle_proactividad)
         for sec in ("<Control-Return>", "<Control-a>", "<Escape>"):
             try:
@@ -118,10 +202,12 @@ class AsistenteApp:
             pass
 
     def _atajos(self, evento):
-        """Atajos de teclado: Ctrl+Enter=Enviar, Ctrl+L=limpiar, Escape=quitar foco."""
+        """Atajos: Ctrl+Enter=Enviar, Ctrl+L=limpiar, Escape=quitar foco, F8=Parar voz."""
         try:
             if evento.keysym == "Return" and evento.state & 0x4:
                 self.enviar()
+            elif evento.keysym == "F8":
+                self._detener_voz_ui()
             elif evento.keysym == "Escape":
                 self.root.focus_set()
                 self.entrada.focus_set()
@@ -204,6 +290,9 @@ class AsistenteApp:
         )
         self.lbl_servidor.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
 
+        self.indicador_estado = IndicadorEstado(marco_barra)
+        self.indicador_estado.pack(side=tk.RIGHT, padx=(0, 4), pady=2)
+
         self.lbl_estado = tk.Label(
             marco_barra,
             text="Listo",
@@ -243,23 +332,55 @@ class AsistenteApp:
         )
         self.btn_mic.pack(side=tk.RIGHT, padx=(6, 2), pady=4)
 
+        self.btn_detener = tk.Button(
+            marco_barra,
+            text="Parar voz",
+            command=self._detener_voz_ui,
+            bg="#3a3a3a",
+            fg="#e0e0e0",
+            activebackground="#555555",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 9),
+            padx=8,
+            pady=4,
+        )
+        self.btn_detener.pack(side=tk.RIGHT, padx=(6, 2), pady=4)
+
+        self.btn_dictado = tk.Button(
+            marco_barra,
+            text="Dictado",
+            command=self._abrir_config_dictado,
+            bg="#3a3a3a",
+            fg="#e0e0e0",
+            activebackground="#555555",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            font=("Segoe UI", 9),
+            padx=8,
+            pady=4,
+        )
+        self.btn_dictado.pack(side=tk.RIGHT, padx=(6, 2), pady=4)
+
         # --- Barra de acciones rápidas (atajos de un clic) ---
         marco_rapidas = tk.Frame(self.root, bg="#26272e")
         marco_rapidas.pack(side=tk.TOP, fill=tk.X)
         acciones = [
-            ("Clima", "¿Cuál es el clima en Madrid?"),
-            ("Resumen del día", "Hazme el resumen del día"),
-            ("Tareas", "Muéstrame mis tareas"),
-            ("Notas", "Qué notas tengo guardadas?"),
-            ("Recordatorios", "Lista mis recordatorios"),
-            ("Agenda", "Muéstrame mi agenda"),
+            ("Clima", "mensaje", "¿Cuál es el clima en Madrid?"),
+            ("Resumen del día", "mensaje", "Hazme el resumen del día"),
+            ("Tareas", "mensaje", "Muéstrame mis tareas"),
+            ("Notas", "mensaje", "Qué notas tengo guardadas?"),
+            ("Recordatorios", "mensaje", "Lista mis recordatorios"),
+            ("Agenda", "mensaje", "Muéstrame mi agenda"),
+            ("Nueva nota", "dialogo", "_pedir_nueva_nota"),
+            ("Documento", "dialogo", "_pedir_documento"),
         ]
         self._btn_accion = {}
-        for texto, msg in acciones:
+        for texto, tipo, valor in acciones:
             b = tk.Button(
                 marco_rapidas,
                 text=texto,
-                command=lambda m=msg: self._accion_rapida(m),
+                command=lambda t=tipo, v=valor: self._accion_rapida(t, v),
                 bg="#34363f",
                 fg="#e0e0e0",
                 activebackground="#4a4d59",
@@ -322,6 +443,8 @@ class AsistenteApp:
         self.entrada = tk.Entry(marco_entrada, font=("Segoe UI", 11))
         self.entrada.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=6)
         self.entrada.bind("<Return>", lambda e: self.enviar())
+        # Si el usuario escribe mientras Robin habla, la cortamos (bloqueo de doble audio)
+        self.entrada.bind("<Key>", lambda e: self._detener_si_habla())
 
         self.btn_enviar = tk.Button(
             marco_entrada,
@@ -338,13 +461,42 @@ class AsistenteApp:
         )
         self.btn_enviar.pack(side=tk.RIGHT)
 
-    def _accion_rapida(self, mensaje):
-        """Envía directamente una acción rápida sin depender de escribir."""
-        if self.ocupado or not mensaje:
+    def _accion_rapida(self, tipo, valor):
+        """Envía una acción rápida de un clic. 'mensaje' va directo; 'dialogo'
+        pregunta primero el contenido con un cuadro de entrada."""
+        if self.ocupado:
+            return
+        if tipo == "dialogo":
+            mensaje = getattr(self, valor)()
+        else:
+            mensaje = valor
+        if not mensaje:
             return
         self.entrada.delete(0, tk.END)
         self.entrada.insert(0, mensaje)
         self.enviar()
+
+    def _preguntar_y_enviar(self, titulo, pregunta, plantilla):
+        """Diálogo genérico: pide un texto y lo convierte en un comando para Robin."""
+        texto = simpledialog.askstring(titulo, pregunta, parent=self.root)
+        texto = (texto or "").strip()
+        if not texto:
+            return None
+        return plantilla.format(texto)
+
+    def _pedir_nueva_nota(self):
+        return self._preguntar_y_enviar(
+            "Nueva nota",
+            "¿Qué quieres apuntar?",
+            "Guarda la nota: {}",
+        )
+
+    def _pedir_documento(self):
+        return self._preguntar_y_enviar(
+            "Crear documento",
+            "¿Sobre qué tema quieres el documento?",
+            "Crea un documento Word sobre: {}",
+        )
 
     def _chequear_servidor(self):
         """Actualiza el indicador del servidor llama.cpp (puerto 8080)."""
@@ -372,6 +524,16 @@ class AsistenteApp:
 
     def _estado(self, texto, color="#9ef01a"):
         self.lbl_estado.config(text=texto, fg=color)
+        t = texto.lower()
+        if t.startswith("pensando"):
+            clave = "pensando"
+        elif t.startswith("hablando"):
+            clave = "hablando"
+        elif t.startswith("grabando") or t.startswith("escuchando"):
+            clave = "grabando"
+        else:
+            clave = None
+        self.indicador_estado.set_estado(clave)
         if texto.startswith("Pensando"):
             self.avatar.expresion_estado("pensando")
             if self.avatar_robin_incrustado is not None:
@@ -446,6 +608,107 @@ class AsistenteApp:
             self.avatar_robin = None
             self._estado(f"Robin: error {e}", "#ef5350")
 
+    def _abrir_config_dictado(self):
+        """Mini-ventana para ajustar el dictado (duración, silencio, motor) en vivo."""
+        try:
+            import voz as _voz
+            config = dict(_voz._CONFIG)
+        except Exception:
+            config = {}
+        win = tk.Toplevel(self.root)
+        win.title("Configurar dictado")
+        win.configure(bg="#26272e")
+        win.geometry("+%d+%d" % (self.root.winfo_rootx() + 40, self.root.winfo_rooty() + 60))
+        win.transient(self.root)
+        win.grab_set()
+
+        def fila(nombre, clave, defec, tipo):
+            tk.Label(win, text=nombre, bg="#26272e", fg="#e0e0e0",
+                     font=("Segoe UI", 9)).grid(sticky="w", padx=10, pady=6)
+            var = tk.StringVar(value=str(config.get(clave, defec)))
+            tk.Entry(win, textvariable=var, width=10, font=("Segoe UI", 9)).grid(
+                row=win.grid_size()[1] - 1, column=1, padx=10, pady=6)
+            return var
+
+        var_dur = fila("Duración máx. (s):", "duracion_max", 20.0, "float")
+        var_sil = fila("Silencio (s):", "silencio", 1.8, "float")
+
+        tk.Label(win, text="Motor STT:", bg="#26272e", fg="#e0e0e0",
+                 font=("Segoe UI", 9)).grid(sticky="w", padx=10, pady=6)
+        var_motor = tk.StringVar(value=str(config.get("motor_stt", "auto")))
+        tk.OptionMenu(win, var_motor, *("auto", "vosk", "google")).grid(
+            sticky="ew", padx=10, pady=6)
+
+        def aplicar():
+            try:
+                import voz as _voz
+                cambios = {}
+                try:
+                    cambios["duracion_max"] = float(var_dur.get())
+                except Exception:
+                    pass
+                try:
+                    cambios["silencio"] = float(var_sil.get())
+                except Exception:
+                    pass
+                cambios["motor_stt"] = var_motor.get().strip().lower()
+                if _voz.aplicar_config(cambios):
+                    self._estado("Dictado actualizado")
+                else:
+                    self._estado("No se pudo aplicar el dictado", "#ef5350")
+            except Exception:
+                self._estado("Error al aplicar dictado", "#ef5350")
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        tk.Button(win, text="Aplicar", command=aplicar,
+                  bg="#2b6cb0", fg="#ffffff", relief=tk.FLAT,
+                  activebackground="#2c5282", activeforeground="#ffffff",
+                  padx=14, pady=4, font=("Segoe UI", 9)).grid(
+            columnspan=2, pady=(12, 10), padx=10, sticky="ew")
+
+    def _detener_si_habla(self):
+        """Detiene el TTS en curso si el usuario empieza a escribir."""
+        try:
+            if voz is not None and voz.hay_voz_activa():
+                voz.detener_voz()
+        except Exception:
+            pass
+
+    def _monitorizar_voz(self):
+        """Enciende el indicador 'Hablando' mientras el TTS reproduce audio
+        (cubre voz normal, streaming por fragmentos y recordatorios)."""
+        try:
+            hablando = voz is not None and voz.hay_voz_activa()
+        except Exception:
+            hablando = False
+        if hablando and not self._hablando_marcado:
+            self._hablando_marcado = True
+            self._estado("Hablando...", "#6fcf97")
+        elif not hablando and self._hablando_marcado:
+            self._hablando_marcado = False
+            if self.ocupado:
+                self._estado("Pensando...", "#ffb74d")
+            elif self._escuchando:
+                self._estado("Grabando...", "#4fc3f7")
+            else:
+                self._estado("Listo")
+        try:
+            self.root.after(450, self._monitorizar_voz)
+        except Exception:
+            pass
+
+    def _detener_voz_ui(self):
+        """Botón/atajo: interrumpe el TTS en curso y vacía la cola de voz."""
+        try:
+            if voz is not None:
+                voz.detener_voz()
+        except Exception:
+            pass
+        self._estado("Voz detenida")
+
     def toggle_voz(self):
         self.voz_activa = not self.voz_activa
         self.btn_voz.config(text="Voz: ON" if self.voz_activa else "Voz: OFF")
@@ -453,9 +716,16 @@ class AsistenteApp:
     def toggle_mic(self):
         if voz is None or self._escuchando or self.ocupado:
             return
+        # Bloqueo de doble audio: si Robin está hablando, la paramos antes de
+        # grabar para que el micrófono no capte su propia voz.
+        try:
+            if voz.hay_voz_activa():
+                voz.detener_voz()
+        except Exception:
+            pass
         self._escuchando = True
-        self.btn_mic.config(text="Escuchando...", state=tk.DISABLED)
-        self._estado("Escuchando...", "#4fc3f7")
+        self.btn_mic.config(text="Grabando...", state=tk.DISABLED)
+        self._estado("Grabando...", "#4fc3f7")
         threading.Thread(target=self._escuchar_y_enviar, daemon=True).start()
 
     def _escuchar_y_enviar(self):
@@ -503,6 +773,31 @@ class AsistenteApp:
         self.chat.config(state=tk.DISABLED)
         self.chat.see(tk.END)
 
+    def _stream_texto(self, frase):
+        """Muestra el texto generado en vivo (desde el hilo de voz/generación)."""
+        self.chat.config(state=tk.NORMAL)
+        if not self._stream_marcado:
+            self.chat.insert(tk.END, f"{self._nombre}: ", "asistente")
+            self._stream_mark = self.chat.index(tk.END)
+            self._stream_marcado = True
+        self.chat.insert(tk.END, f"{frase} ", "normal")
+        self.chat.config(state=tk.DISABLED)
+        self.chat.see(tk.END)
+
+    def _finalizar_stream_texto(self, texto):
+        """Reemplaza el texto provisional emitido en vivo por el texto final completo."""
+        self.chat.config(state=tk.NORMAL)
+        try:
+            fin = self.chat.index(tk.END)
+            self.chat.delete(self._stream_mark, fin)
+        except Exception:
+            pass
+        self.chat.insert(self._stream_mark, f"{texto}\n\n", "normal")
+        self.chat.config(state=tk.DISABLED)
+        self.chat.see(tk.END)
+        self._stream_marcado = False
+        self._stream_mark = None
+
     def _confirmar_en_gui(self, mensaje):
         respuesta = queue.Queue()
         self._al_tk(
@@ -541,6 +836,18 @@ class AsistenteApp:
             self._al_tk(self._finalizar, f"[Error: {e}]")
 
     def _procesar_mensajes(self):
+        # Memoria por contexto: reinyecta el system prompt filtrando los
+        # recuerdos relevantes a la consulta actual del usuario.
+        try:
+            ultimo_user = ""
+            for m in reversed(self.mensajes):
+                if m.get("role") == "user":
+                    ultimo_user = m.get("content", "")
+                    break
+            if self.mensajes and self.mensajes[0].get("role") == "system":
+                self.mensajes[0]["content"] = asistente.sistema_con_contexto(ultimo_user)
+        except Exception:
+            pass
         # Si la voz está activa, usamos streaming: la voz empieza a hablar por
         # frases apenas se generan, en paralelo al avance del texto.
         if self.voz_activa and voz is not None:
@@ -551,12 +858,14 @@ class AsistenteApp:
             import asistente as _as
 
             self._voz_streaming = True
+            self._stream_marcado = False
 
             def on_fragmento(frase):
                 try:
                     voz.hablar_fragmento(frase)
                 except Exception:
                     pass
+                self._al_tk(self._stream_texto, frase)
 
             try:
                 texto = _as.responder_streaming(self.mensajes, on_fragmento=on_fragmento)
@@ -613,7 +922,10 @@ class AsistenteApp:
             self._agregar_mensaje("sistema", texto)
         else:
             self._estado("Listo")
-            self._agregar_mensaje("asistente", texto)
+            if self._stream_marcado:
+                self._finalizar_stream_texto(texto)
+            else:
+                self._agregar_mensaje("asistente", texto)
             self.avatar.expresion_estado("respuesta")
             self.avatar.hablar_texto(texto)
             if self.avatar_robin_incrustado is not None:
@@ -793,6 +1105,12 @@ def main():
         return
     root = tk.Tk()
     AsistenteApp(root)
+    try:
+        import telegram_robin
+        if telegram_robin.iniciar_bot():
+            root.title("Robin - Telegram en línea")
+    except Exception:
+        pass
     try:
         root.lift()
         root.attributes("-topmost", True)
